@@ -9,6 +9,7 @@ The card is designed for the FlightRadar24 Home Assistant integration, but it is
 - Current aircraft overview with flight number, callsign, airline, route, aircraft type, altitude, speed, and distance.
 - Activity list of aircraft that have been seen in the area during the last configurable number of hours.
 - Configurable radar/map section using FlightRadar24, ADS-B Exchange, or a custom URL template.
+- Optional map action buttons to open the provider map or account login page in a new tab.
 - Collapsible sections for current aircraft, map, and activity.
 - Scalable width and height for Home Assistant Sections layouts.
 - Optional fixed card height and per-section scroll areas.
@@ -101,6 +102,23 @@ FlightRadar24:
 map_provider: fr24
 ```
 
+The map section can show action buttons for opening the provider in a normal browser tab and signing in to the selected provider account:
+
+```yaml
+show_map_actions: true
+```
+
+The default login targets are:
+
+- FlightRadar24: `https://www.flightradar24.com/premium/signin`
+- ADS-B Exchange: `https://account.adsbexchange.com/`
+
+To override the login target:
+
+```yaml
+map_login_url: "https://example.com/account/login"
+```
+
 ADS-B Exchange:
 
 ```yaml
@@ -161,6 +179,7 @@ Available section IDs:
 show_header: true
 show_stats: true
 show_map: true
+show_map_actions: true
 show_activity: true
 show_aircraft_image: true
 map_height: 420
@@ -188,6 +207,8 @@ history_source: local
 This card does not include any hardcoded personal location, account, or installation data. It reads the entities you configure in Home Assistant.
 
 When `remember_sections` or activity tracking is enabled, the card stores small UI/activity state records in the browser's `localStorage`. The selected external map provider may receive map requests containing the configured latitude and longitude.
+
+The card does not store third-party account credentials. Sign-in is handled by the selected provider in a separate browser tab. Whether the embedded iframe can use that signed-in session depends on the provider and the browser's third-party cookie policy.
 
 ## HACS Validation
 

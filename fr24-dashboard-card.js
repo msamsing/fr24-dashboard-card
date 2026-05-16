@@ -1,5 +1,5 @@
 (() => {
-  const CARD_VERSION = "0.1.2";
+  const CARD_VERSION = "0.1.3";
   const DEFAULTS = {
     title: "FlightRadar24",
     entity: "sensor.flightradar24_current_in_area",
@@ -10,7 +10,9 @@
     history_hours: 6,
     max_activity_items: 12,
     map_provider: "fr24",
+    map_login_url: "",
     map_height: 420,
+    show_map_actions: true,
     card_height: 0,
     section_max_height: 0,
     grid_columns: 12,
@@ -29,16 +31,19 @@
   const MAP_PROVIDERS = {
     fr24: {
       label: "FlightRadar24",
+      loginUrl: "https://www.flightradar24.com/premium/signin",
       makeUrl: ({ lat, lon, zoom }) =>
         `https://www.flightradar24.com/${fixed(lat)},${fixed(lon)}/${zoom}`,
     },
     adsbx: {
       label: "ADS-B Exchange",
+      loginUrl: "https://account.adsbexchange.com/",
       makeUrl: ({ lat, lon, zoom }) =>
         `https://globe.adsbexchange.com/?lat=${fixed(lat)}&lon=${fixed(lon)}&zoom=${zoom}`,
     },
     custom: {
       label: "Custom URL",
+      loginUrl: "",
       makeUrl: ({ lat, lon, radius, zoom, template }) =>
         template
           ? template
@@ -157,6 +162,10 @@
       selector: { text: {} },
     },
     {
+      name: "map_login_url",
+      selector: { text: {} },
+    },
+    {
       name: "map_height",
       selector: { number: { min: 220, max: 900, mode: "box", unit_of_measurement: "px" } },
     },
@@ -213,6 +222,10 @@
       selector: { boolean: {} },
     },
     {
+      name: "show_map_actions",
+      selector: { boolean: {} },
+    },
+    {
       name: "show_activity",
       selector: { boolean: {} },
     },
@@ -243,6 +256,7 @@
     max_activity_items: "Maximum activity items",
     map_provider: "Map provider",
     map_url_template: "Custom map URL",
+    map_login_url: "Custom login URL",
     map_height: "Map height",
     card_height: "Total card height (0 = auto)",
     section_max_height: "Maximum section height (0 = auto)",
@@ -253,6 +267,7 @@
     show_header: "Show header",
     show_stats: "Show stats",
     show_map: "Show map",
+    show_map_actions: "Show map open/login actions",
     show_activity: "Show activity list",
     show_aircraft_image: "Show aircraft image",
     remember_sections: "Remember opened/closed sections",
@@ -811,6 +826,7 @@
           radius: this._config.radius,
           map_provider: this._config.map_provider,
           map_url_template: this._config.map_url_template,
+          map_login_url: this._config.map_login_url,
           map_height: this._config.map_height,
           card_height: this._config.card_height,
           section_max_height: this._config.section_max_height,
@@ -818,6 +834,7 @@
           show_header: this._config.show_header,
           show_stats: this._config.show_stats,
           show_map: this._config.show_map,
+          show_map_actions: this._config.show_map_actions,
           show_activity: this._config.show_activity,
           show_aircraft_image: this._config.show_aircraft_image,
         },
@@ -906,7 +923,7 @@
     }
 
     _buildMapUrl(location) {
-      const provider = MAP_PROVIDERS[this._config.map_provider] || MAP_PROVIDERS.fr24;
+      const provider = this._getMapProvider();
       return provider.makeUrl({
         lat: location.lat,
         lon: location.lon,
@@ -914,6 +931,14 @@
         zoom: radiusToZoom(this._config.radius),
         template: this._config.map_url_template,
       });
+    }
+
+    _getMapProvider() {
+      return MAP_PROVIDERS[this._config.map_provider] || MAP_PROVIDERS.fr24;
+    }
+
+    _getMapLoginUrl() {
+      return this._config.map_login_url || this._getMapProvider().loginUrl || "";
     }
 
     _renderCardStyle() {
@@ -1104,13 +1129,34 @@
             src="${escapeHtml(mapUrl)}"
             loading="lazy"
             referrerpolicy="no-referrer"
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
             title="Flight radar map"
           ></iframe>
           <div class="map-overlay">
             <span><ha-icon icon="mdi:crosshairs-gps"></ha-icon>${fixed(location.lat)}, ${fixed(location.lon)}</span>
             <span><ha-icon icon="mdi:map-marker-radius"></ha-icon>${formatNumber(this._config.radius)} km</span>
           </div>
+          ${this._config.show_map_actions ? this._renderMapActions(mapUrl) : ""}
+        </div>
+      `;
+    }
+
+    _renderMapActions(mapUrl) {
+      const loginUrl = this._getMapLoginUrl();
+      return `
+        <div class="map-actions">
+          <a href="${escapeHtml(mapUrl)}" target="_blank" rel="noopener noreferrer">
+            <ha-icon icon="mdi:open-in-new"></ha-icon>
+            <span>Open map</span>
+          </a>
+          ${
+            loginUrl
+              ? `<a href="${escapeHtml(loginUrl)}" target="_blank" rel="noopener noreferrer">
+                  <ha-icon icon="mdi:account-circle"></ha-icon>
+                  <span>Login</span>
+                </a>`
+              : ""
+          }
         </div>
       `;
     }
@@ -1556,6 +1602,40 @@
           --mdc-icon-size: 17px;
         }
 
+        .map-actions {
+          position: absolute;
+          right: 12px;
+          top: 12px;
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: flex-end;
+          gap: 8px;
+          max-width: calc(100% - 24px);
+        }
+
+        .map-actions a {
+          min-height: 30px;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 0 10px;
+          border-radius: 8px;
+          color: #fff;
+          background: rgba(18, 28, 38, 0.82);
+          backdrop-filter: blur(8px);
+          font-size: 12px;
+          font-weight: 800;
+          text-decoration: none;
+        }
+
+        .map-actions a:hover {
+          background: rgba(18, 28, 38, 0.94);
+        }
+
+        .map-actions ha-icon {
+          --mdc-icon-size: 17px;
+        }
+
         .activity-list {
           display: grid;
           gap: 8px;
@@ -1720,6 +1800,22 @@
 
           .map-shell {
             height: min(var(--fr24-map-height), 360px);
+          }
+
+          .map-overlay,
+          .map-actions {
+            position: static;
+            margin: 8px;
+          }
+
+          .map-shell {
+            display: flex;
+            flex-direction: column;
+          }
+
+          .map-shell iframe {
+            min-height: 0;
+            flex: 1;
           }
         }
       `;

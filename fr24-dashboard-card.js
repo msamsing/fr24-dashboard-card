@@ -1,5 +1,5 @@
 (() => {
-  const CARD_VERSION = "0.1.7";
+  const CARD_VERSION = "0.1.8";
   const DEFAULTS = {
     title: "FlightRadar24",
     entity: "sensor.flightradar24_current_in_area",
@@ -13,6 +13,7 @@
     map_provider: "fr24",
     map_login_url: "",
     tile_url_template: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    map_line_tile_url_template: "https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
     map_height: 420,
     show_map_actions: false,
     card_height: 0,
@@ -28,8 +29,17 @@
     remember_sections: true,
     history_source: "recorder",
     activity_entities: [],
+    radar_mode: "nor",
+    radar_map_lines: true,
     military_graphics: false,
     compact: false,
+  };
+
+  const RADAR_MODES = ["nor", "mil", "atc"];
+  const RADAR_MODE_LABELS = {
+    nor: "NOR",
+    mil: "MIL",
+    atc: "ATC",
   };
 
   const MAP_PROVIDERS = {
@@ -181,6 +191,10 @@
       selector: { text: {} },
     },
     {
+      name: "map_line_tile_url_template",
+      selector: { text: {} },
+    },
+    {
       name: "map_login_url",
       selector: { text: {} },
     },
@@ -233,6 +247,22 @@
       selector: { entity: { multiple: true, domain: "sensor" } },
     },
     {
+      name: "radar_mode",
+      selector: {
+        select: {
+          options: [
+            { value: "nor", label: "NOR" },
+            { value: "mil", label: "MIL" },
+            { value: "atc", label: "ATC" },
+          ],
+        },
+      },
+    },
+    {
+      name: "radar_map_lines",
+      selector: { boolean: {} },
+    },
+    {
       name: "show_header",
       selector: { boolean: {} },
     },
@@ -261,10 +291,6 @@
       selector: { boolean: {} },
     },
     {
-      name: "military_graphics",
-      selector: { boolean: {} },
-    },
-    {
       name: "compact",
       selector: { boolean: {} },
     },
@@ -285,6 +311,7 @@
     map_provider: "External map provider",
     map_url_template: "Custom map URL",
     tile_url_template: "Map tile URL template",
+    map_line_tile_url_template: "Map line tile URL template",
     map_login_url: "Custom login URL",
     map_height: "Map height",
     card_height: "Total card height (0 = auto)",
@@ -294,6 +321,8 @@
     default_open: "Sections open by default",
     history_source: "Activity source",
     activity_entities: "Additional activity sensors",
+    radar_mode: "Default radar mode",
+    radar_map_lines: "Show map line layer in MIL/ATC",
     show_header: "Show header",
     show_stats: "Show stats",
     show_map: "Show map",
@@ -301,7 +330,6 @@
     show_activity: "Show activity list",
     show_aircraft_image: "Show aircraft image",
     remember_sections: "Remember opened/closed sections",
-    military_graphics: "Military graphics by default",
     compact: "Compact layout",
   };
 
@@ -330,7 +358,18 @@
       activity_entities: Array.isArray(config.activity_entities)
         ? config.activity_entities.filter(Boolean)
         : DEFAULTS.activity_entities,
+      radar_mode: normalizeRadarMode(config.radar_mode, config.military_graphics),
+      radar_map_lines:
+        config.radar_map_lines === undefined
+          ? DEFAULTS.radar_map_lines
+          : Boolean(config.radar_map_lines),
     };
+  }
+
+  function normalizeRadarMode(value, legacyMilitary = false) {
+    const mode = String(value || "").toLowerCase();
+    if (RADAR_MODES.includes(mode)) return mode;
+    return legacyMilitary ? "mil" : DEFAULTS.radar_mode;
   }
 
   function numberOrDefault(value, fallback) {
@@ -557,8 +596,10 @@
       this._historyError = "";
       this._sections = new Map();
       this._sectionStorageKey = "";
-      this._militaryStorageKey = "";
-      this._militaryGraphics = DEFAULTS.military_graphics;
+      this._radarModeStorageKey = "";
+      this._radarMapLinesStorageKey = "";
+      this._radarMode = DEFAULTS.radar_mode;
+      this._radarMapLines = DEFAULTS.radar_map_lines;
       this._lastEntityStateFingerprint = "";
       this._lastRenderFingerprint = "";
       this._hasRendered = false;
@@ -591,9 +632,11 @@
       if (!config) throw new Error("Configuration is missing");
       this._config = normalizeConfig(config);
       this._sectionStorageKey = this._getSectionStorageKey();
-      this._militaryStorageKey = this._getMilitaryStorageKey();
+      this._radarModeStorageKey = this._getRadarModeStorageKey();
+      this._radarMapLinesStorageKey = this._getRadarMapLinesStorageKey();
       this._sections = this._buildInitialSections();
-      this._militaryGraphics = this._loadMilitaryGraphicsState();
+      this._radarMode = this._loadRadarModeState();
+      this._radarMapLines = this._loadRadarMapLinesState();
       this._loadLocalActivity();
       this._render(true);
     }
@@ -838,7 +881,15 @@
       return `fr24-dashboard-card:sections:${this._config.entity}:${this._config.title}`;
     }
 
-    _getMilitaryStorageKey() {
+    _getRadarModeStorageKey() {
+      return `fr24-dashboard-card:radar-mode:${this._config.entity}:${this._config.title}`;
+    }
+
+    _getRadarMapLinesStorageKey() {
+      return `fr24-dashboard-card:radar-map-lines:${this._config.entity}:${this._config.title}`;
+    }
+
+    _getLegacyMilitaryStorageKey() {
       return `fr24-dashboard-card:military:${this._config.entity}:${this._config.title}`;
     }
 
@@ -862,28 +913,58 @@
       }
     }
 
-    _loadMilitaryGraphicsState() {
+    _loadRadarModeState() {
       try {
-        const stored = localStorage.getItem(this._militaryStorageKey);
+        const stored = localStorage.getItem(this._radarModeStorageKey);
+        if (RADAR_MODES.includes(stored)) return stored;
+
+        const legacy = localStorage.getItem(this._getLegacyMilitaryStorageKey());
+        if (legacy === "true") return "mil";
+        if (legacy === "false") return "nor";
+      } catch {
+        // localStorage can be disabled in some kiosk browsers.
+      }
+      return this._config.radar_mode;
+    }
+
+    _saveRadarModeState() {
+      try {
+        localStorage.setItem(this._radarModeStorageKey, this._radarMode);
+      } catch {
+        // localStorage can be disabled in some kiosk browsers.
+      }
+    }
+
+    _loadRadarMapLinesState() {
+      try {
+        const stored = localStorage.getItem(this._radarMapLinesStorageKey);
         if (stored === "true") return true;
         if (stored === "false") return false;
       } catch {
         // localStorage can be disabled in some kiosk browsers.
       }
-      return Boolean(this._config.military_graphics);
+      return this._config.radar_map_lines;
     }
 
-    _saveMilitaryGraphicsState() {
+    _saveRadarMapLinesState() {
       try {
-        localStorage.setItem(this._militaryStorageKey, String(this._militaryGraphics));
+        localStorage.setItem(this._radarMapLinesStorageKey, String(this._radarMapLines));
       } catch {
         // localStorage can be disabled in some kiosk browsers.
       }
     }
 
-    _toggleMilitaryGraphics() {
-      this._militaryGraphics = !this._militaryGraphics;
-      this._saveMilitaryGraphicsState();
+    _setRadarMode(mode) {
+      const nextMode = normalizeRadarMode(mode);
+      if (nextMode === this._radarMode) return;
+      this._radarMode = nextMode;
+      this._saveRadarModeState();
+      this._render(true);
+    }
+
+    _toggleRadarMapLines() {
+      this._radarMapLines = !this._radarMapLines;
+      this._saveRadarMapLinesState();
       this._render(true);
     }
 
@@ -914,7 +995,9 @@
       const currentCount = Number(entity?.state);
       const countLabel = Number.isFinite(currentCount) ? currentCount : currentFlights.length;
       const compactClass = this._config.compact ? " compact" : "";
-      const militaryClass = this._militaryGraphics ? " military" : "";
+      const modeClass =
+        this._radarMode === "mil" ? " military mil" : this._radarMode === "atc" ? " atc" : "";
+      const mapLinesClass = this._radarMapLines ? "" : " map-lines-off";
       const renderFingerprint = this._buildRenderFingerprint({
         currentFlights,
         activityFlights,
@@ -935,7 +1018,7 @@
 
       this.shadowRoot.innerHTML = `
         <style>${this._styles()}</style>
-        <ha-card class="fr24-card${compactClass}${militaryClass}" style="${this._renderCardStyle()}">
+        <ha-card class="fr24-card${compactClass}${modeClass}${mapLinesClass}" style="${this._renderCardStyle()}">
           ${
             this._config.show_header
               ? this._renderHeader(mainFlight, countLabel, location, enteredEntity, exitedEntity)
@@ -978,9 +1061,12 @@
       for (const button of this.shadowRoot.querySelectorAll("[data-section]")) {
         button.addEventListener("click", () => this._toggleSection(button.dataset.section));
       }
+      for (const button of this.shadowRoot.querySelectorAll("[data-radar-mode]")) {
+        button.addEventListener("click", () => this._setRadarMode(button.dataset.radarMode));
+      }
       this.shadowRoot
-        .querySelector("[data-military-toggle]")
-        ?.addEventListener("click", () => this._toggleMilitaryGraphics());
+        .querySelector("[data-map-lines-toggle]")
+        ?.addEventListener("click", () => this._toggleRadarMapLines());
       this._restoreScrollState(scrollState);
     }
 
@@ -998,13 +1084,14 @@
           card_height: this._config.card_height,
           section_max_height: this._config.section_max_height,
           compact: this._config.compact,
+          radar_map_lines: this._radarMapLines,
           show_header: this._config.show_header,
           show_stats: this._config.show_stats,
           show_map: this._config.show_map,
           show_map_actions: this._config.show_map_actions,
           show_activity: this._config.show_activity,
           show_aircraft_image: this._config.show_aircraft_image,
-          military_graphics: this._militaryGraphics,
+          radar_mode: this._radarMode,
         },
         countLabel: model.countLabel,
         entered: model.enteredEntity?.state,
@@ -1036,6 +1123,9 @@
         altitude: flight.altitude,
         speed: flight.speed,
         distance: flight.distance,
+        latitude: flight.latitude,
+        longitude: flight.longitude,
+        heading: flight.heading,
         status: flight.status,
         image: flight.image,
       };
@@ -1141,21 +1231,47 @@
             ${this._config.show_stats ? this._renderStatsLine(countLabel, enteredEntity, exitedEntity) : ""}
           </div>
           <div class="hero-tools">
-            <button
-              class="mode-toggle ${this._militaryGraphics ? "active" : ""}"
-              type="button"
-              data-military-toggle
-              aria-pressed="${this._militaryGraphics}"
-              title="Toggle military graphics"
-            >
-              <ha-icon icon="mdi:shield-radar"></ha-icon>
-              <span>Military graphics</span>
-            </button>
+            ${this._renderRadarModeSelector()}
+            ${this._renderMapLinesToggle()}
             <div class="radar-orbit" aria-hidden="true">
               <div class="sweep"></div>
               <ha-icon icon="mdi:airplane-marker"></ha-icon>
             </div>
           </div>
+        </div>
+      `;
+    }
+
+    _renderMapLinesToggle() {
+      return `
+        <button
+          class="map-lines-toggle ${this._radarMapLines ? "active" : ""}"
+          type="button"
+          data-map-lines-toggle
+          aria-pressed="${this._radarMapLines}"
+          title="Toggle live map line layer in MIL and ATC"
+        >
+          MAP ${this._radarMapLines ? "ON" : "OFF"}
+        </button>
+      `;
+    }
+
+    _renderRadarModeSelector() {
+      return `
+        <div class="mode-toggle-group" role="group" aria-label="Radar mode">
+          ${RADAR_MODES.map(
+            (mode) => `
+              <button
+                class="mode-toggle ${this._radarMode === mode ? "active" : ""}"
+                type="button"
+                data-radar-mode="${mode}"
+                aria-pressed="${this._radarMode === mode}"
+                title="Radar mode ${RADAR_MODE_LABELS[mode]}"
+              >
+                ${escapeHtml(RADAR_MODE_LABELS[mode])}
+              </button>
+            `,
+          ).join("")}
         </div>
       `;
     }
@@ -1324,7 +1440,10 @@
 
     _renderLocalMap(externalMapUrl, location, currentFlights) {
       const zoom = radiusToZoom(this._config.radius);
-      const tileTemplate = this._config.tile_url_template || DEFAULTS.tile_url_template;
+      const radarStyleMap = this._radarMode !== "nor";
+      const tileTemplate = radarStyleMap
+        ? this._config.map_line_tile_url_template || DEFAULTS.map_line_tile_url_template
+        : this._config.tile_url_template || DEFAULTS.tile_url_template;
       const center = latLonToTile(location.lat, location.lon, zoom);
       const centerTileX = Math.floor(center.x);
       const centerTileY = Math.floor(center.y);
@@ -1374,6 +1493,9 @@
                 radiusPixels * 2
               }px;"></div>
               <div class="home-marker" title="Center"></div>
+            </div>
+            ${this._renderRadarScopeOverlay(location, plottedFlights)}
+            <div class="map-marker-layer">
               ${plottedFlights.map((flight) => this._renderMapMarker(flight, location, zoom)).join("")}
             </div>
           </div>
@@ -1382,7 +1504,6 @@
             <span><ha-icon icon="mdi:map-marker-radius"></ha-icon>${formatNumber(this._config.radius)} km</span>
             <span><ha-icon icon="mdi:airplane"></ha-icon>${plottedFlights.length} plotted</span>
           </div>
-          <div class="map-attribution">(c) OpenStreetMap contributors</div>
           ${
             this._config.show_map_actions && externalMapUrl
               ? this._renderMapActions(externalMapUrl)
@@ -1392,20 +1513,99 @@
       `;
     }
 
+    _renderRadarScopeOverlay(location, plottedFlights) {
+      const stats = this._getRadarStats(plottedFlights);
+      return `
+        <div class="radar-scope-overlay" aria-hidden="true">
+          <div class="radar-rings"></div>
+          <div class="radar-crosshair"></div>
+          <div class="radar-sweep"></div>
+          <div class="radar-scanlines"></div>
+          <div class="radar-hud hud-location">
+            <b>LOCATION</b>
+            <span>${fixed(location.lat)}, ${fixed(location.lon)}</span>
+          </div>
+          <div class="radar-hud hud-readouts">
+            <span>R0 = ${formatNumber(this._config.radius)} KM</span>
+            <span>R1 = ${formatNumber(this._config.radius * 0.75)} KM</span>
+            <span>R2 = ${formatNumber(this._config.radius * 0.5)} KM</span>
+            <span>R3 = ${formatNumber(this._config.radius * 0.25)} KM</span>
+          </div>
+          <div class="radar-live-bars">
+            <span>TRK <i style="--bar-value: ${stats.trackPercent}%"></i></span>
+            <span>SPD <i style="--bar-value: ${stats.speedPercent}%"></i></span>
+            <span>ALT <i style="--bar-value: ${stats.altitudePercent}%"></i></span>
+            <span>RNG <i style="--bar-value: ${stats.rangePercent}%"></i></span>
+          </div>
+          <div class="radar-hud hud-track">
+            <span>${String(stats.count).padStart(2, "0")} TRACKS</span>
+            <span>MAX ${stats.maxSpeedLabel}</span>
+            <span>ALT ${stats.maxAltitudeLabel}</span>
+            <span>NEAR ${stats.nearestLabel}</span>
+          </div>
+          <div class="radar-ruler ruler-top"></div>
+          <div class="radar-ruler ruler-bottom"></div>
+          <span class="radar-bearing bearing-n">000</span>
+          <span class="radar-bearing bearing-e">090</span>
+          <span class="radar-bearing bearing-s">180</span>
+          <span class="radar-bearing bearing-w">270</span>
+        </div>
+      `;
+    }
+
+    _getRadarStats(plottedFlights) {
+      const speeds = plottedFlights.map((flight) => Number(flight.speed)).filter(Number.isFinite);
+      const altitudes = plottedFlights
+        .map((flight) => Number(flight.altitude))
+        .filter(Number.isFinite);
+      const distances = plottedFlights
+        .map((flight) => Number(flight.distance))
+        .filter(Number.isFinite);
+      const maxSpeed = speeds.length ? Math.max(...speeds) : null;
+      const maxAltitude = altitudes.length ? Math.max(...altitudes) : null;
+      const nearest = distances.length ? Math.min(...distances) : null;
+      const radius = Number(this._config.radius) || DEFAULTS.radius;
+
+      return {
+        count: plottedFlights.length,
+        maxSpeedLabel: maxSpeed === null ? "- KT" : `${formatNumber(maxSpeed)} KT`,
+        maxAltitudeLabel: maxAltitude === null ? "- FT" : `${formatNumber(maxAltitude)} FT`,
+        nearestLabel: nearest === null ? "- KM" : `${formatNumber(nearest, 1)} KM`,
+        trackPercent: clamp((plottedFlights.length / Math.max(this._config.max_activity_items, 1)) * 100, 8, 100),
+        speedPercent: clamp(((maxSpeed || 0) / 600) * 100, 8, 100),
+        altitudePercent: clamp(((maxAltitude || 0) / 45000) * 100, 8, 100),
+        rangePercent: clamp((radius / 500) * 100, 8, 100),
+      };
+    }
+
     _renderMapMarker(flight, location, zoom) {
       const center = latLonToTile(location.lat, location.lon, zoom);
       const point = latLonToTile(flight.latitude, flight.longitude, zoom);
       const x = (point.x - center.x) * 256;
       const y = (point.y - center.y) * 256;
-      const heading = Number(firstValue(flight.raw, FIELD_ALIASES.heading) || 0);
+      const headingValue = Number(flight.heading || 0);
+      const heading = Number.isFinite(headingValue) ? headingValue : 0;
+      const speed = Number(flight.speed);
+      const altitude = Number(flight.altitude);
+      const trackLength = clamp((Number.isFinite(speed) ? speed : 220) / 600 * 58, 18, 58);
+      const speedLabel = Number.isFinite(speed) ? `${formatNumber(speed)} kts` : "- kts";
+      const altitudeLabel = Number.isFinite(altitude) ? `${formatNumber(altitude)} ft` : "- ft";
 
       return `
         <div
           class="plane-marker"
-          style="transform: translate(${x}px, ${y}px) rotate(${heading - 45}deg);"
+          style="--plane-x: ${x}px; --plane-y: ${y}px; --plane-heading: ${heading}deg; --track-length: ${trackLength}px;"
           title="${escapeHtml(`${flight.flightNumber} - ${flight.aircraft}`)}"
         >
-          <ha-icon icon="mdi:airplane"></ha-icon>
+          <span class="track-line"></span>
+          <span class="atc-target"></span>
+          <svg class="plane-symbol" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M21 16v-2l-8-5V3.5C13 2.67 12.33 2 11.5 2S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"></path>
+          </svg>
+          <span class="atc-label">
+            <b>${escapeHtml(flight.flightNumber)}</b>
+            <span>${escapeHtml(`${speedLabel} ${altitudeLabel}`)}</span>
+          </span>
         </div>
       `;
     }
@@ -1502,7 +1702,8 @@
           scrollbar-width: thin;
         }
 
-        ha-card.fr24-card.military {
+        ha-card.fr24-card.military,
+        ha-card.fr24-card.atc {
           --fr24-accent: #80ff9a;
           --fr24-warn: #ffd45f;
           --fr24-success: #80ff9a;
@@ -1542,11 +1743,40 @@
           flex: 0 0 auto;
         }
 
-        .mode-toggle {
-          min-height: 32px;
+        .mode-toggle-group {
           display: inline-flex;
+          gap: 3px;
+          padding: 3px;
+          border: var(--fr24-soft-border);
+          border-radius: 8px;
+          background: color-mix(in srgb, var(--primary-background-color, #f7f9fc) 70%, transparent);
+        }
+
+        .mode-toggle {
+          min-width: 42px;
+          min-height: 28px;
+          display: inline-flex;
+          justify-content: center;
           align-items: center;
-          gap: 7px;
+          padding: 0 8px;
+          border: 0;
+          border-radius: 6px;
+          background: transparent;
+          color: var(--primary-text-color, #1f2933);
+          cursor: pointer;
+          font: inherit;
+          font-size: 11px;
+          font-weight: 800;
+          white-space: nowrap;
+        }
+
+        .mode-toggle.active {
+          background: color-mix(in srgb, var(--fr24-accent) 18%, transparent);
+          color: var(--primary-text-color, #1f2933);
+        }
+
+        .map-lines-toggle {
+          min-height: 26px;
           padding: 0 10px;
           border: var(--fr24-soft-border);
           border-radius: 8px;
@@ -1554,19 +1784,17 @@
           color: var(--primary-text-color, #1f2933);
           cursor: pointer;
           font: inherit;
-          font-size: 12px;
+          font-size: 11px;
           font-weight: 800;
-          white-space: nowrap;
+          letter-spacing: 0;
         }
 
-        .mode-toggle ha-icon {
-          --mdc-icon-size: 17px;
-          color: var(--fr24-accent);
-        }
-
-        .mode-toggle.active {
+        .map-lines-toggle.active {
           background: color-mix(in srgb, var(--fr24-accent) 18%, transparent);
-          border-color: color-mix(in srgb, var(--fr24-accent) 46%, transparent);
+        }
+
+        .fr24-card:not(.military):not(.atc) .map-lines-toggle {
+          display: none;
         }
 
         .eyebrow {
@@ -1882,6 +2110,7 @@
           position: absolute;
           inset: 0;
           overflow: hidden;
+          background: #dbe7ec;
         }
 
         .tile-grid {
@@ -1891,6 +2120,7 @@
           width: var(--tile-grid-size);
           height: var(--tile-grid-size);
           transform: translate(-50%, -50%);
+          z-index: 1;
         }
 
         .tile-grid img {
@@ -1898,6 +2128,13 @@
           width: 256px;
           height: 256px;
           user-select: none;
+          pointer-events: none;
+        }
+
+        .map-marker-layer {
+          position: absolute;
+          inset: 0;
+          z-index: 3;
           pointer-events: none;
         }
 
@@ -1940,11 +2177,22 @@
           border: 2px solid #fff;
           border-radius: 50%;
           box-shadow: 0 4px 12px rgba(18, 28, 38, 0.36);
+          transform: translate(var(--plane-x), var(--plane-y));
           transform-origin: center;
         }
 
-        .plane-marker ha-icon {
-          --mdc-icon-size: 18px;
+        .plane-symbol {
+          width: 18px;
+          height: 18px;
+          fill: currentColor;
+          transform: rotate(var(--plane-heading));
+          transform-origin: center;
+        }
+
+        .track-line,
+        .atc-target,
+        .atc-label {
+          display: none;
         }
 
         .map-overlay {
@@ -1955,6 +2203,7 @@
           flex-wrap: wrap;
           gap: 8px;
           pointer-events: none;
+          z-index: 4;
         }
 
         .map-overlay span {
@@ -1984,6 +2233,7 @@
           justify-content: flex-end;
           gap: 8px;
           max-width: calc(100% - 24px);
+          z-index: 4;
         }
 
         .map-actions a {
@@ -2009,17 +2259,230 @@
           --mdc-icon-size: 17px;
         }
 
-        .map-attribution {
+        .radar-scope-overlay {
           position: absolute;
-          right: 10px;
-          bottom: 8px;
-          padding: 3px 6px;
-          border-radius: 6px;
-          color: rgba(255, 255, 255, 0.92);
-          background: rgba(18, 28, 38, 0.62);
-          font-size: 10px;
-          line-height: 1.2;
+          inset: 0;
+          display: none;
+          overflow: hidden;
+          border-radius: inherit;
           pointer-events: none;
+          color: #80ff9a;
+          z-index: 2;
+        }
+
+        .radar-scope-overlay > * {
+          position: absolute;
+        }
+
+        .radar-scope-overlay::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          background:
+            radial-gradient(circle at center, rgba(128, 255, 154, 0.16) 0 7%, rgba(18, 120, 56, 0.17) 8% 38%, rgba(2, 26, 11, 0.5) 68%, rgba(0, 8, 3, 0.9) 100%),
+            linear-gradient(90deg, rgba(128, 255, 154, 0.06), transparent 18%, transparent 82%, rgba(128, 255, 154, 0.06));
+          box-shadow: inset 0 0 92px rgba(0, 0, 0, 0.72), inset 0 0 36px rgba(128, 255, 154, 0.14);
+        }
+
+        .radar-rings {
+          left: 50%;
+          top: 50%;
+          width: min(90%, calc(var(--fr24-map-height) - 34px));
+          max-width: calc(100% - 24px);
+          max-height: calc(100% - 24px);
+          aspect-ratio: 1;
+          border-radius: 50%;
+          border: 1px solid rgba(128, 255, 154, 0.72);
+          background:
+            repeating-radial-gradient(circle, transparent 0 calc(14.25% - 1px), rgba(128, 255, 154, 0.44) calc(14.25% - 1px) 14.25%),
+            repeating-conic-gradient(rgba(128, 255, 154, 0.58) 0 0.7deg, transparent 0.7deg 4deg);
+          box-shadow: 0 0 26px rgba(128, 255, 154, 0.16), inset 0 0 54px rgba(128, 255, 154, 0.08);
+          opacity: 0.82;
+          transform: translate(-50%, -50%);
+          -webkit-mask: radial-gradient(circle, transparent 0 9%, #000 10% 100%);
+          mask: radial-gradient(circle, transparent 0 9%, #000 10% 100%);
+        }
+
+        .radar-crosshair {
+          left: 50%;
+          top: 50%;
+          width: min(90%, calc(var(--fr24-map-height) - 34px));
+          max-width: calc(100% - 24px);
+          max-height: calc(100% - 24px);
+          aspect-ratio: 1;
+          border-radius: 50%;
+          opacity: 0.48;
+          transform: translate(-50%, -50%);
+        }
+
+        .radar-crosshair::before,
+        .radar-crosshair::after {
+          content: "";
+          position: absolute;
+          background: rgba(128, 255, 154, 0.52);
+          box-shadow: 0 0 12px rgba(128, 255, 154, 0.26);
+        }
+
+        .radar-crosshair::before {
+          left: 50%;
+          top: 0;
+          width: 1px;
+          height: 100%;
+        }
+
+        .radar-crosshair::after {
+          left: 0;
+          top: 50%;
+          width: 100%;
+          height: 1px;
+        }
+
+        .radar-sweep {
+          left: 50%;
+          top: 50%;
+          width: min(126%, calc(var(--fr24-map-height) + 120px));
+          max-width: calc(100% + 120px);
+          max-height: calc(100% + 120px);
+          aspect-ratio: 1;
+          border-radius: 50%;
+          background: conic-gradient(from -18deg, rgba(128, 255, 154, 0.44) 0deg, rgba(128, 255, 154, 0.16) 34deg, rgba(128, 255, 154, 0.04) 56deg, transparent 78deg 360deg);
+          mix-blend-mode: screen;
+          transform: translate(-50%, -50%);
+          transform-origin: center;
+          animation: radar-scope-spin 5.6s linear infinite;
+        }
+
+        .radar-sweep::after {
+          content: "";
+          position: absolute;
+          left: 50%;
+          top: 50%;
+          width: 50%;
+          height: 2px;
+          background: linear-gradient(90deg, rgba(128, 255, 154, 0.05), rgba(128, 255, 154, 0.94));
+          box-shadow: 0 0 12px rgba(128, 255, 154, 0.68);
+          transform-origin: left center;
+        }
+
+        .radar-scanlines {
+          inset: 0;
+          background: repeating-linear-gradient(0deg, rgba(128, 255, 154, 0.06) 0 1px, transparent 1px 5px);
+          mix-blend-mode: screen;
+          opacity: 0.45;
+        }
+
+        .radar-bearing {
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-size: 11px;
+          font-weight: 800;
+          line-height: 1;
+          color: rgba(151, 255, 99, 0.92);
+          text-shadow: 0 0 10px rgba(128, 255, 154, 0.52);
+          z-index: 1;
+        }
+
+        .bearing-n {
+          left: 50%;
+          top: 8px;
+          transform: translateX(-50%);
+        }
+
+        .bearing-e {
+          right: 10px;
+          top: 50%;
+          transform: translateY(-50%);
+        }
+
+        .bearing-s {
+          left: 50%;
+          bottom: 8px;
+          transform: translateX(-50%);
+        }
+
+        .bearing-w {
+          left: 10px;
+          top: 50%;
+          transform: translateY(-50%);
+        }
+
+        .radar-hud {
+          z-index: 1;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          color: rgba(79, 255, 116, 0.92);
+          text-shadow: 0 0 10px rgba(79, 255, 116, 0.35);
+          font-size: 10px;
+          line-height: 1.25;
+          letter-spacing: 0;
+        }
+
+        .radar-hud b,
+        .radar-hud span {
+          display: block;
+        }
+
+        .hud-location {
+          left: 12px;
+          top: 12px;
+        }
+
+        .hud-readouts {
+          left: 12px;
+          top: 126px;
+        }
+
+        .hud-track {
+          right: 12px;
+          top: 12px;
+          width: 150px;
+        }
+
+        .radar-live-bars {
+          left: 12px;
+          top: 54px;
+          display: grid;
+          gap: 5px;
+          width: 92px;
+          z-index: 1;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-size: 9px;
+          color: rgba(79, 255, 116, 0.92);
+        }
+
+        .radar-live-bars span {
+          display: grid;
+          grid-template-columns: 26px minmax(0, 1fr);
+          align-items: center;
+          gap: 5px;
+        }
+
+        .radar-live-bars i {
+          display: block;
+          height: 4px;
+          background: linear-gradient(90deg, #4fff74 0 var(--bar-value), rgba(79, 255, 116, 0.14) var(--bar-value) 100%);
+          box-shadow: 0 0 9px rgba(79, 255, 116, 0.24);
+        }
+
+        .radar-ruler {
+          left: 8px;
+          right: 8px;
+          height: 11px;
+          opacity: 0.56;
+          background: repeating-linear-gradient(90deg, rgba(79, 255, 116, 0.75) 0 2px, transparent 2px 10px);
+          z-index: 1;
+        }
+
+        .ruler-top {
+          top: 4px;
+          border-top: 2px solid rgba(79, 255, 116, 0.7);
+        }
+
+        .ruler-bottom {
+          bottom: 4px;
+          border-bottom: 2px solid rgba(79, 255, 116, 0.7);
+        }
+
+        @keyframes radar-scope-spin {
+          to { transform: translate(-50%, -50%) rotate(360deg); }
         }
 
         .activity-list {
@@ -2079,7 +2542,8 @@
           font-size: 12px;
         }
 
-        .military .hero {
+        .military .hero,
+        .atc .hero {
           background:
             linear-gradient(135deg, rgba(128, 255, 154, 0.15), transparent 48%),
             repeating-linear-gradient(90deg, rgba(128, 255, 154, 0.04) 0 1px, transparent 1px 22px),
@@ -2088,77 +2552,104 @@
         }
 
         .military .eyebrow,
+        .atc .eyebrow,
         .military .hero-subtitle,
+        .atc .hero-subtitle,
         .military .stats-inline,
+        .atc .stats-inline,
         .military .muted,
+        .atc .muted,
         .military .aircraft-card span,
+        .atc .aircraft-card span,
         .military .aircraft-card small,
+        .atc .aircraft-card small,
         .military .mini-flight small,
-        .military .chevron {
+        .atc .mini-flight small,
+        .military .chevron,
+        .atc .chevron {
           color: rgba(217, 255, 226, 0.68);
         }
 
         .military .hero-title,
-        .military .flight-number {
+        .atc .hero-title,
+        .military .flight-number,
+        .atc .flight-number {
           color: #f0fff3;
           text-shadow: 0 0 14px rgba(128, 255, 154, 0.26);
         }
 
-        .military .mode-toggle {
+        .military .mode-toggle,
+        .atc .mode-toggle,
+        .military .map-lines-toggle,
+        .atc .map-lines-toggle {
           color: #d9ffe2;
           background: rgba(4, 12, 8, 0.78);
           border-color: rgba(128, 255, 154, 0.32);
           text-transform: uppercase;
         }
 
-        .military .mode-toggle.active {
+        .military .mode-toggle.active,
+        .atc .mode-toggle.active,
+        .military .map-lines-toggle.active,
+        .atc .map-lines-toggle.active {
           color: #06110c;
           background: #80ff9a;
           box-shadow: 0 0 18px rgba(128, 255, 154, 0.28);
         }
 
-        .military .mode-toggle.active ha-icon {
-          color: #06110c;
-        }
-
-        .military .radar-orbit {
+        .military .radar-orbit,
+        .atc .radar-orbit {
           border-color: rgba(128, 255, 154, 0.42);
           background:
             radial-gradient(circle, rgba(128, 255, 154, 0.25) 0 8%, transparent 9% 30%, rgba(128, 255, 154, 0.14) 31% 32%, transparent 33% 58%, rgba(128, 255, 154, 0.12) 59% 60%, transparent 61%);
         }
 
-        .military .sweep {
+        .military .sweep,
+        .atc .sweep {
           background: linear-gradient(60deg, rgba(128, 255, 154, 0.58), transparent 68%);
         }
 
         .military .flight-focus,
+        .atc .flight-focus,
         .military .aircraft-card,
+        .atc .aircraft-card,
         .military .mini-flight,
+        .atc .mini-flight,
         .military .activity-item,
+        .atc .activity-item,
         .military .empty-state,
-        .military .history-note {
+        .atc .empty-state,
+        .military .history-note,
+        .atc .history-note {
           background: rgba(5, 17, 11, 0.82);
           border-color: rgba(128, 255, 154, 0.24);
           box-shadow: inset 0 0 0 1px rgba(255, 212, 95, 0.04);
         }
 
-        .military .metric span {
+        .military .metric span,
+        .atc .metric span {
           color: rgba(128, 255, 154, 0.7);
         }
 
         .military .metric strong,
+        .atc .metric strong,
         .military .activity-flight,
+        .atc .activity-flight,
         .military .aircraft-card strong,
-        .military .mini-flight span {
+        .atc .aircraft-card strong,
+        .military .mini-flight span,
+        .atc .mini-flight span {
           color: #eaffef;
         }
 
-        .military .metric {
+        .military .metric,
+        .atc .metric {
           background: rgba(128, 255, 154, 0.07);
           border: 1px solid rgba(128, 255, 154, 0.12);
         }
 
-        .military .live-badge {
+        .military .live-badge,
+        .atc .live-badge {
           color: #06110c;
           background: #ffd45f;
           border-radius: 6px;
@@ -2166,64 +2657,151 @@
         }
 
         .military .local-map-shell,
-        .military .map-shell {
+        .atc .local-map-shell,
+        .military .map-shell,
+        .atc .map-shell {
           background: #06110c;
           border-color: rgba(128, 255, 154, 0.34);
           box-shadow: inset 0 0 34px rgba(128, 255, 154, 0.08);
         }
 
-        .military .local-map-shell::after {
-          content: "";
-          position: absolute;
-          inset: 0;
-          pointer-events: none;
-          background:
-            linear-gradient(rgba(128, 255, 154, 0.16) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(128, 255, 154, 0.16) 1px, transparent 1px);
-          background-size: 48px 48px;
+        .military .local-map-viewport,
+        .atc .local-map-viewport {
+          background: #010d05;
+        }
+
+        .military .tile-grid img,
+        .atc .tile-grid img {
+          filter: grayscale(1) brightness(1.6) sepia(1) hue-rotate(68deg) saturate(4.8) contrast(1.25);
+          opacity: 0.74;
           mix-blend-mode: screen;
-          opacity: 0.35;
         }
 
-        .military .tile-grid img {
-          filter: grayscale(1) brightness(0.42) sepia(0.8) hue-rotate(72deg) saturate(1.6);
+        .military.map-lines-off .tile-grid img,
+        .atc.map-lines-off .tile-grid img {
+          opacity: 0;
         }
 
-        .military .radius-ring {
-          border-color: #ffd45f;
+        .military:not(.map-lines-off) .radar-scope-overlay::before,
+        .atc:not(.map-lines-off) .radar-scope-overlay::before {
+          background:
+            radial-gradient(circle at center, rgba(128, 255, 154, 0.08) 0 7%, rgba(18, 120, 56, 0.08) 8% 38%, rgba(2, 26, 11, 0.26) 68%, rgba(0, 8, 3, 0.58) 100%),
+            linear-gradient(90deg, rgba(128, 255, 154, 0.04), transparent 18%, transparent 82%, rgba(128, 255, 154, 0.04));
+        }
+
+        .military .radar-scope-overlay,
+        .atc .radar-scope-overlay {
+          display: block;
+        }
+
+        .military .map-overlay,
+        .atc .map-overlay {
+          display: none;
+        }
+
+        .military .radius-ring,
+        .atc .radius-ring {
+          border-color: rgba(128, 255, 154, 0.76);
           border-style: dashed;
-          background: rgba(255, 212, 95, 0.08);
-          box-shadow: 0 0 26px rgba(255, 212, 95, 0.18);
+          background: rgba(128, 255, 154, 0.04);
+          box-shadow: 0 0 26px rgba(128, 255, 154, 0.2);
         }
 
-        .military .home-marker {
+        .military .home-marker,
+        .atc .home-marker {
           background: #07110d;
-          border-color: #ffd45f;
-          box-shadow: 0 0 18px rgba(255, 212, 95, 0.4);
+          border-color: #80ff9a;
+          box-shadow: 0 0 18px rgba(128, 255, 154, 0.42);
         }
 
         .military .plane-marker {
-          color: #06110c;
-          background: #80ff9a;
-          border-color: #ffd45f;
-          border-radius: 6px;
-          box-shadow: 0 0 18px rgba(128, 255, 154, 0.32);
+          width: 24px;
+          height: 24px;
+          margin: -12px 0 0 -12px;
+          color: #9cff9a;
+          background: transparent;
+          border: 0;
+          border-radius: 0;
+          box-shadow: none;
+          text-shadow: 0 0 10px rgba(128, 255, 154, 0.8);
+        }
+
+        .military .plane-symbol {
+          width: 24px;
+          height: 24px;
+          filter: drop-shadow(0 0 5px rgba(128, 255, 154, 0.72));
+        }
+
+        .atc .radar-sweep {
+          opacity: 0.2;
+          animation-duration: 8s;
+        }
+
+        .atc .plane-marker {
+          width: 7px;
+          height: 7px;
+          margin: -3px 0 0 -3px;
+          color: #b7ffcb;
+          background: #b7ffcb;
+          border: 1px solid rgba(183, 255, 203, 0.9);
+          border-radius: 1px;
+          box-shadow: 0 0 8px rgba(183, 255, 203, 0.74);
+        }
+
+        .atc .plane-symbol {
+          display: none;
+        }
+
+        .atc .track-line {
+          display: block;
+          position: absolute;
+          left: 50%;
+          top: 50%;
+          width: var(--track-length);
+          height: 1px;
+          background: linear-gradient(90deg, rgba(183, 255, 203, 0.86), transparent);
+          box-shadow: 0 0 7px rgba(183, 255, 203, 0.36);
+          transform: rotate(calc(var(--plane-heading) + 180deg));
+          transform-origin: left center;
+        }
+
+        .atc .atc-label {
+          display: block;
+          position: absolute;
+          left: 11px;
+          top: -18px;
+          min-width: 92px;
+          color: #c8fff7;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-size: 10px;
+          line-height: 1.15;
+          letter-spacing: 0;
+          text-shadow: 0 0 8px rgba(108, 255, 241, 0.62);
+          white-space: nowrap;
+        }
+
+        .atc .atc-label b,
+        .atc .atc-label span {
+          display: block;
         }
 
         .military .map-overlay span,
+        .atc .map-overlay span,
         .military .map-actions a,
-        .military .map-attribution {
+        .atc .map-actions a {
           color: #d9ffe2;
           background: rgba(4, 12, 8, 0.84);
           border: 1px solid rgba(128, 255, 154, 0.24);
           text-transform: uppercase;
         }
 
-        .military .panel {
+        .military .panel,
+        .atc .panel {
           border-top-color: rgba(128, 255, 154, 0.18);
         }
 
-        .military .panel-title {
+        .military .panel-title,
+        .atc .panel-title {
           color: #eaffef;
           text-transform: uppercase;
         }
@@ -2308,8 +2886,7 @@
           }
 
           .map-overlay,
-          .map-actions,
-          .map-attribution {
+          .map-actions {
             position: static;
             margin: 8px;
           }

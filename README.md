@@ -17,6 +17,7 @@ The card is designed for the FlightRadar24 Home Assistant integration, but it is
 - Optional fixed card height and per-section scroll areas.
 - Visual configuration editor in Home Assistant.
 - Uses Home Assistant's configured location, a location entity, or fixed coordinates.
+- Radar modes: NOR, MIL, and ATC with live aircraft-derived overlays.
 
 ## Recommended Repository Name
 
@@ -198,21 +199,37 @@ show_map_actions: false
 show_activity: true
 show_aircraft_image: true
 map_height: 420
-military_graphics: false
+radar_mode: nor
+radar_map_lines: true
+map_line_tile_url_template: "https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png"
 compact: false
 ```
 
-## Military Graphics
+## Radar Modes
 
-The existing layout can be switched into an OPS-room inspired visual mode from the dashboard itself. Use the **Military graphics** button in the card header to toggle it on or off.
+The existing layout can be switched from the dashboard itself using the **NOR**, **MIL**, and **ATC** controls in the card header.
 
-The choice is stored in the browser's `localStorage`. You can also make the card start in that mode:
+The choice is stored in the browser's `localStorage`. You can also make the card start in a specific mode:
 
 ```yaml
-military_graphics: true
+radar_mode: atc
 ```
 
-This is a visual treatment only. It does not change the data source, map provider, or aircraft tracking logic.
+Available values are `nor`, `mil`, and `atc`. Existing configurations using `military_graphics: true` still start in `mil` mode for backward compatibility.
+
+When the local radar map is used, MIL mode adds a radar-style overlay with a rotating green sweep, compact HUD readouts, and heading-aware plane symbols. ATC mode uses small target squares with track lines and labels showing flight number, speed in knots, and altitude in feet. Overlay readouts are derived from configured location, radius, and current aircraft data.
+
+In MIL and ATC modes, the **MAP** toggle shows or hides a live line-map tile layer behind the radar scope. By default it uses a dark no-label basemap and renders it as monotone green linework. You can set the default state with:
+
+```yaml
+radar_map_lines: true
+```
+
+You can also use your own line-style tile source:
+
+```yaml
+map_line_tile_url_template: "https://example.com/tiles/{z}/{x}/{y}.png"
+```
 
 ## Activity History
 
@@ -247,7 +264,7 @@ The FlightRadar24 integration exposes `flights` attributes on Current in area, E
 Releases use numeric semantic version tags, for example:
 
 ```text
-v0.1.7
+v0.1.8
 ```
 
 HACS uses GitHub release tag names as the remote version when releases are available, so releases should be installed by version number rather than commit hash.

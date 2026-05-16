@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.1.8
+
+- Add NOR, MIL, and ATC radar modes to the card header.
+- Add a radar-scope overlay to the local map when MIL or ATC mode is active.
+- Add animated green sweep, bearing labels, scanlines, and circular radar range rings.
+- Fade the local map tiles into subtle green background lines in radar modes.
+- Render aircraft as small heading-aware plane symbols in MIL mode.
+- Add ATC target squares with live track lines, flight number, speed, and altitude labels.
+- Add live radar HUD readouts and remove the local map attribution badge from the radar image.
+- Add a MAP toggle for showing a live green line-map tile layer in MIL and ATC modes.
+
 ## v0.1.7
 
 - Show the primary flight number and aircraft type in the header instead of the area count.

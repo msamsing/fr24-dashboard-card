@@ -1,0 +1,15 @@
+{
+  "name": "fr24-dashboard-card",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A Home Assistant Lovelace card for FlightRadar24 current area dashboards.",
+  "scripts": {
+    "check": "node --check fr24-dashboard-card.js"
+  },
+  "keywords": [
+    "home-assistant",
+    "lovelace",
+    "flightradar24"
+  ],
+  "license": "MIT"
+}

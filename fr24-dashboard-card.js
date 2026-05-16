@@ -1,5 +1,5 @@
 (() => {
-  const CARD_VERSION = "0.1.1";
+  const CARD_VERSION = "0.1.2";
   const DEFAULTS = {
     title: "FlightRadar24",
     entity: "sensor.flightradar24_current_in_area",
@@ -457,6 +457,8 @@
       this._sections = new Map();
       this._sectionStorageKey = "";
       this._lastEntityStateFingerprint = "";
+      this._lastRenderFingerprint = "";
+      this._hasRendered = false;
     }
 
     static getConfigElement() {
@@ -488,14 +490,14 @@
       this._sectionStorageKey = this._getSectionStorageKey();
       this._sections = this._buildInitialSections();
       this._loadLocalActivity();
-      this._render();
+      this._render(true);
     }
 
     set hass(hass) {
       this._hass = hass;
-      this._syncCurrentFlights();
+      const activityChanged = this._syncCurrentFlights();
       this._loadRecorderHistory();
-      this._render();
+      this._render(activityChanged);
     }
 
     getCardSize() {
@@ -523,10 +525,10 @@
 
     _syncCurrentFlights() {
       const entity = this._getEntity(this._config.entity);
-      if (!entity) return;
+      if (!entity) return false;
       const flights = this._getFlightsFromEntity(entity);
       const fingerprint = JSON.stringify(flights.map((flight) => getFlightKey(flight)));
-      if (fingerprint === this._lastEntityStateFingerprint) return;
+      if (fingerprint === this._lastEntityStateFingerprint) return false;
       this._lastEntityStateFingerprint = fingerprint;
 
       const seenAt = Date.now();
@@ -539,6 +541,7 @@
       }
       this._pruneActivity();
       this._saveLocalActivity();
+      return true;
     }
 
     async _loadRecorderHistory() {
@@ -580,10 +583,10 @@
         this._pruneActivity();
         this._saveLocalActivity();
       } catch (error) {
-        this._historyError = error?.message || "Recorder-historik kunne ikke hentes";
+        this._historyError = error?.message || "Recorder history could not be loaded";
       } finally {
         this._historyLoading = false;
-        this._render();
+        this._render(true);
       }
     }
 
@@ -719,7 +722,7 @@
     _toggleSection(section) {
       this._sections.set(section, !this._isOpen(section));
       this._saveSectionState();
-      this._render();
+      this._render(true);
     }
 
     _isOpen(section) {
@@ -727,7 +730,7 @@
       return this._sections.get(section);
     }
 
-    _render() {
+    _render(force = false) {
       if (!this.shadowRoot || !this._config) return;
 
       const currentFlights = this._getCurrentFlights();
@@ -743,6 +746,23 @@
       const currentCount = Number(entity?.state);
       const countLabel = Number.isFinite(currentCount) ? currentCount : currentFlights.length;
       const compactClass = this._config.compact ? " compact" : "";
+      const renderFingerprint = this._buildRenderFingerprint({
+        currentFlights,
+        activityFlights,
+        enteredEntity,
+        exitedEntity,
+        location,
+        mapUrl,
+        countLabel,
+      });
+
+      if (!force && this._hasRendered && renderFingerprint === this._lastRenderFingerprint) {
+        return;
+      }
+
+      this._lastRenderFingerprint = renderFingerprint;
+      this._hasRendered = true;
+      const scrollState = this._captureScrollState();
 
       this.shadowRoot.innerHTML = `
         <style>${this._styles()}</style>
@@ -781,6 +801,108 @@
       for (const button of this.shadowRoot.querySelectorAll("[data-section]")) {
         button.addEventListener("click", () => this._toggleSection(button.dataset.section));
       }
+      this._restoreScrollState(scrollState);
+    }
+
+    _buildRenderFingerprint(model) {
+      return JSON.stringify({
+        config: {
+          title: this._config.title,
+          radius: this._config.radius,
+          map_provider: this._config.map_provider,
+          map_url_template: this._config.map_url_template,
+          map_height: this._config.map_height,
+          card_height: this._config.card_height,
+          section_max_height: this._config.section_max_height,
+          compact: this._config.compact,
+          show_header: this._config.show_header,
+          show_stats: this._config.show_stats,
+          show_map: this._config.show_map,
+          show_activity: this._config.show_activity,
+          show_aircraft_image: this._config.show_aircraft_image,
+        },
+        countLabel: model.countLabel,
+        entered: model.enteredEntity?.state,
+        exited: model.exitedEntity?.state,
+        location: model.location,
+        mapUrl: model.mapUrl,
+        sections: Object.fromEntries(this._sections.entries()),
+        historyLoading: this._historyLoading,
+        historyError: this._historyError,
+        currentFlights: model.currentFlights.map((flight) => this._flightRenderData(flight)),
+        activityFlights: model.activityFlights.map((flight) => ({
+          ...this._flightRenderData(flight),
+          firstSeen: flight.firstSeen,
+          lastSeen: flight.lastSeen,
+        })),
+      });
+    }
+
+    _flightRenderData(flight) {
+      return {
+        key: flight.key,
+        flightNumber: flight.flightNumber,
+        callsign: flight.callsign,
+        airline: flight.airline,
+        aircraft: flight.aircraft,
+        registration: flight.registration,
+        origin: flight.origin,
+        destination: flight.destination,
+        altitude: flight.altitude,
+        speed: flight.speed,
+        distance: flight.distance,
+        status: flight.status,
+        image: flight.image,
+      };
+    }
+
+    _captureScrollState() {
+      const scroller = this._findScrollParent();
+      if (!scroller) return null;
+      return {
+        scroller,
+        top: scroller.scrollTop,
+        left: scroller.scrollLeft,
+      };
+    }
+
+    _restoreScrollState(scrollState) {
+      if (!scrollState?.scroller) return;
+      const restore = () => {
+        if (
+          scrollState.scroller === document.scrollingElement ||
+          scrollState.scroller.isConnected
+        ) {
+          scrollState.scroller.scrollTop = scrollState.top;
+          scrollState.scroller.scrollLeft = scrollState.left;
+        }
+      };
+
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(restore);
+      } else {
+        setTimeout(restore, 0);
+      }
+    }
+
+    _findScrollParent() {
+      let node = this;
+      while (node) {
+        if (node instanceof HTMLElement) {
+          const style = getComputedStyle(node);
+          const canScroll = /(auto|scroll|overlay)/.test(style.overflowY);
+          if (canScroll && node.scrollHeight > node.clientHeight) return node;
+        }
+        node = this._getComposedParent(node);
+      }
+
+      return document.scrollingElement || document.documentElement;
+    }
+
+    _getComposedParent(node) {
+      if (node.parentNode) return node.parentNode;
+      const root = node.getRootNode?.();
+      return root?.host || null;
     }
 
     _buildMapUrl(location) {

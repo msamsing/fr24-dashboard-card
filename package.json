@@ -1,6 +1,6 @@
 {
   "name": "fr24-dashboard-card",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "A Home Assistant Lovelace card for FlightRadar24 current area dashboards.",
   "scripts": {

@@ -67,14 +67,14 @@
           render() {
             const icon = this.getAttribute("icon") || "";
             const glyph = icon.includes("radar")
-              ? "◉"
+              ? "*"
               : icon.includes("map")
-                ? "⌖"
+                ? "+"
                 : icon.includes("chevron-up")
-                  ? "⌃"
+                  ? "^"
                   : icon.includes("chevron-down")
-                    ? "⌄"
-                    : "✈";
+                    ? "v"
+                    : ">";
             this.innerHTML = `<span aria-hidden="true">${glyph}</span>`;
           }
         },
@@ -95,6 +95,9 @@
           altitude: 6250,
           ground_speed: 290,
           distance: 0.9,
+          latitude: 51.505,
+          longitude: -0.13,
+          heading: 86,
           tracked_type: "Live",
         },
         {
@@ -108,6 +111,9 @@
           altitude: 18750,
           ground_speed: 412,
           distance: 18.4,
+          latitude: 51.56,
+          longitude: -0.02,
+          heading: 118,
         },
         {
           id: "mt789",
@@ -119,6 +125,9 @@
           altitude: 10900,
           ground_speed: 336,
           distance: 32.7,
+          latitude: 51.42,
+          longitude: -0.22,
+          heading: 42,
         },
       ];
 
@@ -176,7 +185,7 @@
           .p1 { left:38%; top:34%; } .p2 { left:63%; top:43%; color:#5eead4; } .p3 { left:48%; top:68%; }
           .label { position:absolute; left:18px; bottom:18px; font-weight:700; opacity:.84; }
         </style>
-        <div class="map"><div class="radius"></div><div class="home"></div><div class="plane p1">✈</div><div class="plane p2">✈</div><div class="plane p3">✈</div><div class="label">Demo radar - 25 km</div></div>
+        <div class="map"><div class="radius"></div><div class="home"></div><div class="plane p1">&gt;</div><div class="plane p2">&gt;</div><div class="plane p3">&gt;</div><div class="label">Demo radar - 25 km</div></div>
       `);
 
       const card = document.getElementById("demo-card");
@@ -190,6 +199,7 @@
         history_hours: 6,
         map_provider: "custom",
         map_url_template: `data:text/html;charset=utf-8,${mapHtml}`,
+        map_render_mode: "local",
         map_height: 360,
         card_height: 820,
         section_max_height: 420,

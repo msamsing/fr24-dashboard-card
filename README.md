@@ -8,7 +8,8 @@ The card is designed for the FlightRadar24 Home Assistant integration, but it is
 
 - Current aircraft overview with flight number, callsign, airline, route, aircraft type, altitude, speed, and distance.
 - Activity list of aircraft that have been seen in the area during the last configurable number of hours.
-- Configurable radar/map section using FlightRadar24, ADS-B Exchange, or a custom URL template.
+- Local radar map using OpenStreetMap tiles and aircraft coordinates from the Home Assistant sensor.
+- Optional embedded provider map using FlightRadar24, ADS-B Exchange, or a custom URL template.
 - Optional map action buttons to open the provider map or account login page in a new tab.
 - Collapsible sections for current aircraft, map, and activity.
 - Scalable width and height for Home Assistant Sections layouts.
@@ -95,6 +96,19 @@ radius: 25
 ```
 
 ## Map Providers
+
+The default map mode is the local radar map. It does not embed ADS-B Exchange or FlightRadar24, so it avoids provider-side iframe/API errors such as ADS-B Exchange `403` responses.
+
+```yaml
+map_render_mode: local
+tile_url_template: "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+```
+
+If you still want to embed an external provider map:
+
+```yaml
+map_render_mode: external
+```
 
 FlightRadar24:
 
@@ -194,6 +208,8 @@ The card first tries to read Home Assistant Recorder history through the fronten
 history_hours: 12
 max_activity_items: 20
 history_source: recorder
+entered_entity: sensor.flightradar24_entered_area
+exited_entity: sensor.flightradar24_exited_area
 ```
 
 Local browser memory only:
@@ -201,6 +217,26 @@ Local browser memory only:
 ```yaml
 history_source: local
 ```
+
+You can add more sensors that expose a `flights` attribute:
+
+```yaml
+activity_entities:
+  - sensor.flightradar24_last_5_flights
+  - sensor.flightradar24_additional_tracked
+```
+
+The FlightRadar24 integration exposes `flights` attributes on Current in area, Entered area, Exited area, and Additional tracked sensors. If you want a longer event-style history, create a Home Assistant template sensor from the integration's `flightradar24_entry` or `flightradar24_exit` events and add it to `activity_entities`.
+
+## Versioning
+
+Releases use numeric semantic version tags, for example:
+
+```text
+v0.1.4
+```
+
+HACS uses GitHub release tag names as the remote version when releases are available, so releases should be installed by version number rather than commit hash.
 
 ## Privacy Notes
 

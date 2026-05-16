@@ -1,5 +1,5 @@
 (() => {
-  const CARD_VERSION = "0.1.3";
+  const CARD_VERSION = "0.1.4";
   const DEFAULTS = {
     title: "FlightRadar24",
     entity: "sensor.flightradar24_current_in_area",
@@ -9,8 +9,10 @@
     radius: 25,
     history_hours: 6,
     max_activity_items: 12,
+    map_render_mode: "local",
     map_provider: "fr24",
     map_login_url: "",
+    tile_url_template: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
     map_height: 420,
     show_map_actions: true,
     card_height: 0,
@@ -25,6 +27,7 @@
     default_open: ["overview", "map", "activity"],
     remember_sections: true,
     history_source: "recorder",
+    activity_entities: [],
     compact: false,
   };
 
@@ -146,6 +149,17 @@
       selector: { number: { min: 1, max: 50, mode: "box" } },
     },
     {
+      name: "map_render_mode",
+      selector: {
+        select: {
+          options: [
+            { value: "local", label: "Local radar map" },
+            { value: "external", label: "Embedded provider map" },
+          ],
+        },
+      },
+    },
+    {
       name: "map_provider",
       selector: {
         select: {
@@ -159,6 +173,10 @@
     },
     {
       name: "map_url_template",
+      selector: { text: {} },
+    },
+    {
+      name: "tile_url_template",
       selector: { text: {} },
     },
     {
@@ -210,6 +228,10 @@
       },
     },
     {
+      name: "activity_entities",
+      selector: { entity: { multiple: true, domain: "sensor" } },
+    },
+    {
       name: "show_header",
       selector: { boolean: {} },
     },
@@ -254,8 +276,10 @@
     radius: "Radius",
     history_hours: "Activity window",
     max_activity_items: "Maximum activity items",
-    map_provider: "Map provider",
+    map_render_mode: "Map render mode",
+    map_provider: "External map provider",
     map_url_template: "Custom map URL",
+    tile_url_template: "Map tile URL template",
     map_login_url: "Custom login URL",
     map_height: "Map height",
     card_height: "Total card height (0 = auto)",
@@ -264,6 +288,7 @@
     grid_rows: "Sections layout height (0 = auto)",
     default_open: "Sections open by default",
     history_source: "Activity source",
+    activity_entities: "Additional activity sensors",
     show_header: "Show header",
     show_stats: "Show stats",
     show_map: "Show map",
@@ -296,6 +321,9 @@
       default_open: Array.isArray(config.default_open)
         ? config.default_open
         : DEFAULTS.default_open,
+      activity_entities: Array.isArray(config.activity_entities)
+        ? config.activity_entities.filter(Boolean)
+        : DEFAULTS.activity_entities,
     };
   }
 
@@ -338,7 +366,7 @@
 
   function formatNumber(value, maximumFractionDigits = 0) {
     const number = Number(value);
-    if (!Number.isFinite(number)) return value || "–";
+    if (!Number.isFinite(number)) return value || "-";
     return new Intl.NumberFormat(undefined, { maximumFractionDigits }).format(number);
   }
 
@@ -374,10 +402,84 @@
     return 6;
   }
 
+  function latLonToTile(lat, lon, zoom) {
+    const latitude = clamp(Number(lat), -85.05112878, 85.05112878);
+    const longitude = Number(lon);
+    const latRad = (latitude * Math.PI) / 180;
+    const scale = 2 ** zoom;
+    return {
+      x: ((longitude + 180) / 360) * scale,
+      y:
+        ((1 -
+          Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) /
+          2) *
+        scale,
+    };
+  }
+
+  function wrapTileX(x, zoom) {
+    const scale = 2 ** zoom;
+    return ((x % scale) + scale) % scale;
+  }
+
+  function clampTileY(y, zoom) {
+    const max = 2 ** zoom - 1;
+    return clamp(y, 0, max);
+  }
+
+  function tileUrl(template, x, y, z) {
+    return template
+      .replaceAll("{x}", String(x))
+      .replaceAll("{y}", String(y))
+      .replaceAll("{z}", String(z));
+  }
+
+  function metersPerPixel(lat, zoom) {
+    return (156543.03392 * Math.cos((Number(lat) * Math.PI) / 180)) / 2 ** zoom;
+  }
+
   function asArray(value) {
     if (!value) return [];
     if (Array.isArray(value)) return value;
     if (typeof value === "object") return Object.values(value);
+    return [];
+  }
+
+  function parseMaybeJson(value) {
+    if (typeof value !== "string") return value;
+    const trimmed = value.trim();
+    if (!trimmed || !["[", "{"].includes(trimmed[0])) return value;
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return value;
+    }
+  }
+
+  function looksLikeFlightObject(value) {
+    return (
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      Boolean(
+        firstValue(value, FIELD_ALIASES.flight) ||
+          firstValue(value, FIELD_ALIASES.airline) ||
+          firstValue(value, FIELD_ALIASES.aircraft) ||
+          firstValue(value, FIELD_ALIASES.registration) ||
+          (hasValue(firstValue(value, FIELD_ALIASES.latitude)) &&
+            hasValue(firstValue(value, FIELD_ALIASES.longitude))),
+      )
+    );
+  }
+
+  function asFlightList(value) {
+    const parsed = parseMaybeJson(value);
+    if (!parsed) return [];
+    if (Array.isArray(parsed)) return parsed.filter(Boolean);
+    if (looksLikeFlightObject(parsed)) return [parsed];
+    if (typeof parsed === "object") {
+      return Object.values(parsed).flatMap((item) => asFlightList(item));
+    }
     return [];
   }
 
@@ -510,7 +612,7 @@
 
     set hass(hass) {
       this._hass = hass;
-      const activityChanged = this._syncCurrentFlights();
+      const activityChanged = this._syncActivitySources();
       this._loadRecorderHistory();
       this._render(activityChanged);
     }
@@ -538,32 +640,50 @@
       };
     }
 
-    _syncCurrentFlights() {
-      const entity = this._getEntity(this._config.entity);
-      if (!entity) return false;
-      const flights = this._getFlightsFromEntity(entity);
-      const fingerprint = JSON.stringify(flights.map((flight) => getFlightKey(flight)));
+    _syncActivitySources() {
+      const sources = this._getActivitySourceEntityIds()
+        .map((entityId) => [entityId, this._getEntity(entityId)])
+        .filter(([, entity]) => entity);
+      if (!sources.length) return false;
+
+      const fingerprint = JSON.stringify(
+        sources.map(([entityId, entity]) => ({
+          entityId,
+          state: entity.state,
+          changed: entity.last_changed,
+          updated: entity.last_updated,
+          flights: this._getFlightsFromEntity(entity).map((flight) => this._rawFlightFingerprint(flight)),
+        })),
+      );
       if (fingerprint === this._lastEntityStateFingerprint) return false;
       this._lastEntityStateFingerprint = fingerprint;
 
       const seenAt = Date.now();
-      for (const flight of flights) {
-        const normalized = normalizeFlight(flight, seenAt);
-        this._activity.set(
-          normalized.key,
-          mergeActivity(this._activity.get(normalized.key), normalized),
-        );
+      for (const [, entity] of sources) {
+        for (const flight of this._getFlightsFromEntity(entity)) {
+          const normalized = normalizeFlight(flight, seenAt);
+          this._activity.set(
+            normalized.key,
+            mergeActivity(this._activity.get(normalized.key), normalized),
+          );
+        }
       }
       this._pruneActivity();
       this._saveLocalActivity();
       return true;
     }
 
+    _rawFlightFingerprint(flight) {
+      const normalized = normalizeFlight(flight, 0);
+      return this._flightRenderData(normalized);
+    }
+
     async _loadRecorderHistory() {
       if (this._config.history_source !== "recorder") return;
       if (!this._hass?.callWS || !this._config.entity || this._historyLoading) return;
 
-      const key = `${this._config.entity}:${this._config.history_hours}`;
+      const entityIds = this._getActivitySourceEntityIds();
+      const key = `${entityIds.join(",")}:${this._config.history_hours}`;
       if (key === this._historyRequestKey) return;
 
       this._historyRequestKey = key;
@@ -577,7 +697,7 @@
           type: "history/history_during_period",
           start_time: start.toISOString(),
           end_time: end.toISOString(),
-          entity_ids: [this._config.entity],
+          entity_ids: entityIds,
           minimal_response: false,
           no_attributes: false,
         });
@@ -609,13 +729,29 @@
       return entityId && this._hass?.states ? this._hass.states[entityId] : undefined;
     }
 
+    _getActivitySourceEntityIds() {
+      return [
+        this._config.entity,
+        this._config.entered_entity,
+        this._config.exited_entity,
+        ...this._config.activity_entities,
+      ].filter((entityId, index, entityIds) => entityId && entityIds.indexOf(entityId) === index);
+    }
+
     _getFlightsFromEntity(entity) {
       return this._getFlightsFromState(entity);
     }
 
     _getFlightsFromState(state) {
       const attributes = state?.attributes || state?.a || {};
-      return asArray(attributes.flights || attributes.aircraft || attributes.items).filter(Boolean);
+      return [
+        attributes.flights,
+        attributes.aircraft,
+        attributes.items,
+        attributes.flight,
+        attributes.last_flight,
+        attributes.latest_flight,
+      ].flatMap((candidate) => asFlightList(candidate));
     }
 
     _getLocation() {
@@ -796,7 +932,7 @@
                   "map",
                   "Radar",
                   "mdi:radar",
-                  this._renderMap(mapUrl, location),
+                  this._renderMap(mapUrl, location, currentFlights),
                 )
               : ""
           }
@@ -804,7 +940,7 @@
             this._config.show_activity
               ? this._renderSection(
                   "activity",
-                  `Activity · ${this._config.history_hours} hours`,
+                  `Activity - ${this._config.history_hours} hours`,
                   "mdi:format-list-bulleted",
                   this._renderActivity(activityFlights),
                 )
@@ -825,8 +961,10 @@
           title: this._config.title,
           radius: this._config.radius,
           map_provider: this._config.map_provider,
+          map_render_mode: this._config.map_render_mode,
           map_url_template: this._config.map_url_template,
           map_login_url: this._config.map_login_url,
+          tile_url_template: this._config.tile_url_template,
           map_height: this._config.map_height,
           card_height: this._config.card_height,
           section_max_height: this._config.section_max_height,
@@ -968,7 +1106,7 @@
             </div>
             <div class="hero-title">${escapeHtml(countLabel)} in area</div>
             <div class="hero-subtitle">
-              ${escapeHtml(location.label)} · ${formatNumber(this._config.radius)} km radius
+              ${escapeHtml(location.label)} - ${formatNumber(this._config.radius)} km radius
             </div>
           </div>
           <div class="radar-orbit" aria-hidden="true">
@@ -983,8 +1121,8 @@
       return `
         <div class="stats-grid">
           ${this._renderStat("mdi:airplane-marker", "Current", countLabel)}
-          ${this._renderStat("mdi:airplane-plus", "Entered", enteredEntity?.state ?? "–")}
-          ${this._renderStat("mdi:airplane-minus", "Exited", exitedEntity?.state ?? "–")}
+          ${this._renderStat("mdi:airplane-plus", "Entered", enteredEntity?.state ?? "-")}
+          ${this._renderStat("mdi:airplane-minus", "Exited", exitedEntity?.state ?? "-")}
           ${this._renderStat("mdi:map-marker-radius", "Radius", `${formatNumber(this._config.radius)} km`)}
         </div>
       `;
@@ -1085,7 +1223,7 @@
         ? Number.isFinite(numeric)
           ? `${formatNumber(numeric, precision)} ${unit}`
           : String(value)
-        : "–";
+        : "-";
       return `
         <div class="metric">
           <span>${escapeHtml(label)}</span>
@@ -1113,7 +1251,7 @@
       `;
     }
 
-    _renderMap(mapUrl, location) {
+    _renderMap(mapUrl, location, currentFlights) {
       if (!mapUrl) {
         return `
           <div class="empty-state">
@@ -1121,6 +1259,10 @@
             <span>Enter a custom map URL</span>
           </div>
         `;
+      }
+
+      if (this._config.map_render_mode !== "external") {
+        return this._renderLocalMap(mapUrl, location, currentFlights);
       }
 
       return `
@@ -1137,6 +1279,90 @@
             <span><ha-icon icon="mdi:map-marker-radius"></ha-icon>${formatNumber(this._config.radius)} km</span>
           </div>
           ${this._config.show_map_actions ? this._renderMapActions(mapUrl) : ""}
+        </div>
+      `;
+    }
+
+    _renderLocalMap(externalMapUrl, location, currentFlights) {
+      const zoom = radiusToZoom(this._config.radius);
+      const tileTemplate = this._config.tile_url_template || DEFAULTS.tile_url_template;
+      const center = latLonToTile(location.lat, location.lon, zoom);
+      const centerTileX = Math.floor(center.x);
+      const centerTileY = Math.floor(center.y);
+      const centerOffsetX = (center.x - centerTileX) * 256;
+      const centerOffsetY = (center.y - centerTileY) * 256;
+      const tileRange = [-1, 0, 1];
+      const tileSize = 256;
+      const gridSize = tileSize * tileRange.length;
+      const radiusPixels = Math.max(
+        34,
+        (Number(this._config.radius) * 1000) / metersPerPixel(location.lat, zoom),
+      );
+      const plottedFlights = currentFlights.filter(
+        (flight) => hasValue(flight.latitude) && hasValue(flight.longitude),
+      );
+
+      return `
+        <div class="local-map-shell">
+          <div class="local-map-viewport">
+            <div class="tile-grid" style="--tile-grid-size: ${gridSize}px">
+              ${tileRange
+                .flatMap((row) =>
+                  tileRange.map((col) => {
+                    const x = centerTileX + col;
+                    const y = centerTileY + row;
+                    return `
+                      <img
+                        alt=""
+                        loading="lazy"
+                        src="${escapeHtml(
+                          tileUrl(
+                            tileTemplate,
+                            wrapTileX(x, zoom),
+                            clampTileY(y, zoom),
+                            zoom,
+                          ),
+                        )}"
+                        style="left: ${gridSize / 2 + col * tileSize - centerOffsetX}px; top: ${
+                          gridSize / 2 + row * tileSize - centerOffsetY
+                        }px;"
+                      >
+                    `;
+                  }),
+                )
+                .join("")}
+              <div class="radius-ring" style="width: ${radiusPixels * 2}px; height: ${
+                radiusPixels * 2
+              }px;"></div>
+              <div class="home-marker" title="Center"></div>
+              ${plottedFlights.map((flight) => this._renderMapMarker(flight, location, zoom)).join("")}
+            </div>
+          </div>
+          <div class="map-overlay">
+            <span><ha-icon icon="mdi:crosshairs-gps"></ha-icon>${fixed(location.lat)}, ${fixed(location.lon)}</span>
+            <span><ha-icon icon="mdi:map-marker-radius"></ha-icon>${formatNumber(this._config.radius)} km</span>
+            <span><ha-icon icon="mdi:airplane"></ha-icon>${plottedFlights.length} plotted</span>
+          </div>
+          <div class="map-attribution">(c) OpenStreetMap contributors</div>
+          ${this._config.show_map_actions ? this._renderMapActions(externalMapUrl) : ""}
+        </div>
+      `;
+    }
+
+    _renderMapMarker(flight, location, zoom) {
+      const center = latLonToTile(location.lat, location.lon, zoom);
+      const point = latLonToTile(flight.latitude, flight.longitude, zoom);
+      const x = (point.x - center.x) * 256;
+      const y = (point.y - center.y) * 256;
+      const heading = Number(firstValue(flight.raw, FIELD_ALIASES.heading) || 0);
+
+      return `
+        <div
+          class="plane-marker"
+          style="transform: translate(${x}px, ${y}px) rotate(${heading - 45}deg);"
+          title="${escapeHtml(`${flight.flightNumber} - ${flight.aircraft}`)}"
+        >
+          <ha-icon icon="mdi:airplane"></ha-icon>
         </div>
       `;
     }
@@ -1190,7 +1416,7 @@
                       <span>${escapeHtml(formatRelative(flight.lastSeen))}</span>
                     </div>
                     <div class="activity-meta">
-                      ${escapeHtml(flight.airline)} · ${escapeHtml(flight.aircraft)}
+                      ${escapeHtml(flight.airline)} - ${escapeHtml(flight.aircraft)}
                     </div>
                   </div>
                 </article>
@@ -1405,8 +1631,8 @@
 
         .overview-grid {
           display: grid;
-          grid-template-columns: minmax(0, 1.6fr) minmax(220px, 0.8fr);
-          gap: 14px;
+          grid-template-columns: minmax(0, 1fr) minmax(150px, 0.28fr);
+          gap: 10px;
         }
 
         .flight-focus,
@@ -1419,7 +1645,7 @@
         }
 
         .flight-focus {
-          padding: 16px;
+          padding: 12px;
           min-width: 0;
         }
 
@@ -1431,7 +1657,7 @@
         }
 
         .flight-number {
-          font-size: 38px;
+          font-size: 30px;
           line-height: 1;
           font-weight: 800;
           overflow-wrap: anywhere;
@@ -1455,7 +1681,7 @@
           grid-template-columns: max-content minmax(18px, 1fr) 24px minmax(18px, 1fr) max-content;
           align-items: center;
           gap: 8px;
-          margin: 20px 0;
+          margin: 12px 0;
           font-weight: 700;
         }
 
@@ -1478,35 +1704,36 @@
         .metric-row {
           display: grid;
           grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 10px;
+          gap: 8px;
         }
 
         .metric {
           min-width: 0;
-          padding: 10px;
+          padding: 8px;
           border-radius: 8px;
           background: color-mix(in srgb, var(--primary-background-color, #f7f9fc) 74%, transparent);
         }
 
         .metric strong {
           display: block;
-          margin-top: 4px;
-          font-size: 22px;
+          margin-top: 3px;
+          font-size: 18px;
           line-height: 1.1;
           overflow-wrap: anywhere;
         }
 
         .aircraft-card {
-          padding: 12px;
+          padding: 10px;
           display: grid;
-          gap: 12px;
+          gap: 8px;
           align-content: start;
         }
 
         .aircraft-card img,
         .aircraft-placeholder {
           width: 100%;
-          aspect-ratio: 16 / 9;
+          max-height: 92px;
+          aspect-ratio: 4 / 3;
           border-radius: 8px;
           object-fit: cover;
           background: color-mix(in srgb, var(--primary-background-color, #f7f9fc) 82%, transparent);
@@ -1567,11 +1794,90 @@
           border: var(--fr24-soft-border);
         }
 
+        .local-map-shell {
+          position: relative;
+          min-height: 240px;
+          height: var(--fr24-map-height);
+          overflow: hidden;
+          border-radius: 8px;
+          background: #dbe7ec;
+          border: var(--fr24-soft-border);
+        }
+
         .map-shell iframe {
           width: 100%;
           height: 100%;
           border: 0;
           display: block;
+        }
+
+        .local-map-viewport {
+          position: absolute;
+          inset: 0;
+          overflow: hidden;
+        }
+
+        .tile-grid {
+          position: absolute;
+          left: 50%;
+          top: 50%;
+          width: var(--tile-grid-size);
+          height: var(--tile-grid-size);
+          transform: translate(-50%, -50%);
+        }
+
+        .tile-grid img {
+          position: absolute;
+          width: 256px;
+          height: 256px;
+          user-select: none;
+          pointer-events: none;
+        }
+
+        .radius-ring {
+          position: absolute;
+          left: 50%;
+          top: 50%;
+          border: 2px solid color-mix(in srgb, var(--fr24-warn) 82%, transparent);
+          border-radius: 50%;
+          background: color-mix(in srgb, var(--fr24-warn) 14%, transparent);
+          box-shadow: 0 0 34px color-mix(in srgb, var(--fr24-warn) 22%, transparent);
+          transform: translate(-50%, -50%);
+          pointer-events: none;
+        }
+
+        .home-marker {
+          position: absolute;
+          left: 50%;
+          top: 50%;
+          width: 13px;
+          height: 13px;
+          border-radius: 50%;
+          background: #fff;
+          border: 3px solid var(--fr24-accent);
+          box-shadow: 0 2px 8px rgba(18, 28, 38, 0.35);
+          transform: translate(-50%, -50%);
+        }
+
+        .plane-marker {
+          position: absolute;
+          left: 50%;
+          top: 50%;
+          width: 30px;
+          height: 30px;
+          display: grid;
+          place-items: center;
+          margin: -15px 0 0 -15px;
+          color: #fff;
+          background: color-mix(in srgb, var(--fr24-accent) 90%, #111827);
+          border: 2px solid #fff;
+          border-radius: 50%;
+          box-shadow: 0 4px 12px rgba(18, 28, 38, 0.36);
+          transform-origin: center;
+        }
+
+        .plane-marker ha-icon {
+          --mdc-icon-size: 18px;
         }
 
         .map-overlay {
@@ -1634,6 +1940,19 @@
 
         .map-actions ha-icon {
           --mdc-icon-size: 17px;
+        }
+
+        .map-attribution {
+          position: absolute;
+          right: 10px;
+          bottom: 8px;
+          padding: 3px 6px;
+          border-radius: 6px;
+          color: rgba(255, 255, 255, 0.92);
+          background: rgba(18, 28, 38, 0.62);
+          font-size: 10px;
+          line-height: 1.2;
+          pointer-events: none;
         }
 
         .activity-list {
@@ -1741,7 +2060,7 @@
           }
 
           .flight-number {
-            font-size: 32px;
+            font-size: 28px;
           }
 
           .radar-orbit {
@@ -1798,22 +2117,27 @@
             justify-self: center;
           }
 
-          .map-shell {
+          .map-shell,
+          .local-map-shell {
             height: min(var(--fr24-map-height), 360px);
           }
 
           .map-overlay,
-          .map-actions {
+          .map-actions,
+          .map-attribution {
             position: static;
             margin: 8px;
           }
 
-          .map-shell {
+          .map-shell,
+          .local-map-shell {
             display: flex;
             flex-direction: column;
           }
 
-          .map-shell iframe {
+          .map-shell iframe,
+          .local-map-viewport {
+            position: relative;
             min-height: 0;
             flex: 1;
           }

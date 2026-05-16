@@ -1,5 +1,5 @@
 (() => {
-  const CARD_VERSION = "0.1.0";
+  const CARD_VERSION = "0.1.1";
   const DEFAULTS = {
     title: "FlightRadar24",
     entity: "sensor.flightradar24_current_in_area",
@@ -1610,20 +1610,23 @@
       this.attachShadow({ mode: "open" });
       this._config = {};
       this._hass = null;
+      this._rendered = false;
+      this._valueChangedHandler = this._handleValueChanged.bind(this);
     }
 
     setConfig(config) {
       this._config = normalizeConfig(config || {});
-      this._render();
+      this._renderOnce();
+      this._updateForm();
     }
 
     set hass(hass) {
       this._hass = hass;
-      this._render();
+      this._updateForm();
     }
 
-    _render() {
-      if (!this.shadowRoot) return;
+    _renderOnce() {
+      if (!this.shadowRoot || this._rendered) return;
       this.shadowRoot.innerHTML = `
         <style>
           :host { display: block; }
@@ -1642,22 +1645,31 @@
       `;
 
       const form = this.shadowRoot.querySelector("ha-form");
+      form?.addEventListener("value-changed", this._valueChangedHandler);
+      this._rendered = true;
+    }
+
+    _updateForm() {
+      if (!this.shadowRoot) return;
+      this._renderOnce();
+      const form = this.shadowRoot.querySelector("ha-form");
       if (form) {
         form.hass = this._hass;
         form.data = this._config;
         form.schema = EDITOR_SCHEMA;
         form.computeLabel = this._computeLabel;
       }
-      form?.addEventListener("value-changed", (event) => {
-        this._config = event.detail.value;
-        this.dispatchEvent(
-          new CustomEvent("config-changed", {
-            detail: { config: this._cleanConfig(this._config) },
-            bubbles: true,
-            composed: true,
-          }),
-        );
-      });
+    }
+
+    _handleValueChanged(event) {
+      this._config = event.detail.value;
+      this.dispatchEvent(
+        new CustomEvent("config-changed", {
+          detail: { config: this._cleanConfig(this._config) },
+          bubbles: true,
+          composed: true,
+        }),
+      );
     }
 
     _computeLabel(schema) {

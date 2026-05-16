@@ -1,5 +1,5 @@
 (() => {
-  const CARD_VERSION = "0.1.4";
+  const CARD_VERSION = "0.1.5";
   const DEFAULTS = {
     title: "FlightRadar24",
     entity: "sensor.flightradar24_current_in_area",
@@ -14,7 +14,7 @@
     map_login_url: "",
     tile_url_template: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
     map_height: 420,
-    show_map_actions: true,
+    show_map_actions: false,
     card_height: 0,
     section_max_height: 0,
     grid_columns: 12,
@@ -1252,6 +1252,10 @@
     }
 
     _renderMap(mapUrl, location, currentFlights) {
+      if (this._config.map_render_mode !== "external") {
+        return this._renderLocalMap(mapUrl, location, currentFlights);
+      }
+
       if (!mapUrl) {
         return `
           <div class="empty-state">
@@ -1259,10 +1263,6 @@
             <span>Enter a custom map URL</span>
           </div>
         `;
-      }
-
-      if (this._config.map_render_mode !== "external") {
-        return this._renderLocalMap(mapUrl, location, currentFlights);
       }
 
       return `
@@ -1344,7 +1344,11 @@
             <span><ha-icon icon="mdi:airplane"></ha-icon>${plottedFlights.length} plotted</span>
           </div>
           <div class="map-attribution">(c) OpenStreetMap contributors</div>
-          ${this._config.show_map_actions ? this._renderMapActions(externalMapUrl) : ""}
+          ${
+            this._config.show_map_actions && externalMapUrl
+              ? this._renderMapActions(externalMapUrl)
+              : ""
+          }
         </div>
       `;
     }

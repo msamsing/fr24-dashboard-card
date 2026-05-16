@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.5
+
+- Make the local radar map fully independent of external provider URLs.
+- Disable provider open/login action buttons by default.
+- Keep external provider maps available only when `map_render_mode: external` is selected.
+
 ## v0.1.4
 
 - Use a local radar map by default to avoid provider-side iframe/API errors such as ADS-B Exchange `403` responses.

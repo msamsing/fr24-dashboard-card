@@ -116,10 +116,10 @@ FlightRadar24:
 map_provider: fr24
 ```
 
-The map section can show action buttons for opening the provider in a normal browser tab and signing in to the selected provider account:
+The map section can show action buttons for opening the external provider in a normal browser tab and signing in to the selected provider account. This is disabled by default because the local radar map does not need provider login:
 
 ```yaml
-show_map_actions: true
+show_map_actions: false
 ```
 
 The default login targets are:
@@ -193,7 +193,7 @@ Available section IDs:
 show_header: true
 show_stats: true
 show_map: true
-show_map_actions: true
+show_map_actions: false
 show_activity: true
 show_aircraft_image: true
 map_height: 420
@@ -233,7 +233,7 @@ The FlightRadar24 integration exposes `flights` attributes on Current in area, E
 Releases use numeric semantic version tags, for example:
 
 ```text
-v0.1.4
+v0.1.5
 ```
 
 HACS uses GitHub release tag names as the remote version when releases are available, so releases should be installed by version number rather than commit hash.

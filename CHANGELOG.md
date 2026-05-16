@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.7
+
+- Show the primary flight number and aircraft type in the header instead of the area count.
+- Move Current, Entered, Exited, and Radius into a very small supporting text line under the location subtitle.
+- Compact each activity entry to a single row with flight number, airline, route, and aircraft type.
+
 ## v0.1.6
 
 - Add a dashboard toggle for Military graphics mode.

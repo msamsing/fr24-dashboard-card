@@ -6,8 +6,9 @@ The card is designed for the FlightRadar24 Home Assistant integration, but it is
 
 ## Features
 
+- Compact current aircraft header with primary flight number and aircraft type, plus small Current, Entered, Exited, and Radius supporting text.
 - Current aircraft overview with flight number, callsign, airline, route, aircraft type, altitude, speed, and distance.
-- Activity list of aircraft that have been seen in the area during the last configurable number of hours.
+- Single-row activity list of aircraft seen in the area during the last configurable number of hours, showing flight number, airline, route, and aircraft type.
 - Local radar map using OpenStreetMap tiles and aircraft coordinates from the Home Assistant sensor.
 - Optional embedded provider map using FlightRadar24, ADS-B Exchange, or a custom URL template.
 - Optional map action buttons to open the provider map or account login page in a new tab.
@@ -246,7 +247,7 @@ The FlightRadar24 integration exposes `flights` attributes on Current in area, E
 Releases use numeric semantic version tags, for example:
 
 ```text
-v0.1.6
+v0.1.7
 ```
 
 HACS uses GitHub release tag names as the remote version when releases are available, so releases should be installed by version number rather than commit hash.

@@ -1,5 +1,5 @@
 (() => {
-  const CARD_VERSION = "0.1.6";
+  const CARD_VERSION = "0.1.7";
   const DEFAULTS = {
     title: "FlightRadar24",
     entity: "sensor.flightradar24_current_in_area",
@@ -374,28 +374,6 @@
     const number = Number(value);
     if (!Number.isFinite(number)) return value || "-";
     return new Intl.NumberFormat(undefined, { maximumFractionDigits }).format(number);
-  }
-
-  function formatDateTime(value) {
-    if (!value) return "";
-    const date = value instanceof Date ? value : new Date(value);
-    if (Number.isNaN(date.getTime())) return "";
-    return new Intl.DateTimeFormat(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(date);
-  }
-
-  function formatRelative(value) {
-    const date = value instanceof Date ? value : new Date(value);
-    if (Number.isNaN(date.getTime())) return "";
-    const delta = Date.now() - date.getTime();
-    const minutes = Math.max(0, Math.round(delta / 60000));
-    if (minutes < 1) return "nu";
-    if (minutes < 60) return `${minutes} min siden`;
-    const hours = Math.floor(minutes / 60);
-    const rest = minutes % 60;
-    return rest ? `${hours} t ${rest} min siden` : `${hours} t siden`;
   }
 
   function radiusToZoom(radius) {
@@ -958,8 +936,16 @@
       this.shadowRoot.innerHTML = `
         <style>${this._styles()}</style>
         <ha-card class="fr24-card${compactClass}${militaryClass}" style="${this._renderCardStyle()}">
-          ${this._config.show_header ? this._renderHeader(countLabel, location) : ""}
-          ${this._config.show_stats ? this._renderStats(countLabel, enteredEntity, exitedEntity) : ""}
+          ${
+            this._config.show_header
+              ? this._renderHeader(mainFlight, countLabel, location, enteredEntity, exitedEntity)
+              : ""
+          }
+          ${
+            !this._config.show_header && this._config.show_stats
+              ? this._renderStats(countLabel, enteredEntity, exitedEntity)
+              : ""
+          }
           ${this._renderSection(
             "overview",
             "Current Aircraft",
@@ -1140,7 +1126,7 @@
       return styles.join("; ");
     }
 
-    _renderHeader(countLabel, location) {
+    _renderHeader(mainFlight, countLabel, location, enteredEntity, exitedEntity) {
       return `
         <div class="hero">
           <div class="hero-copy">
@@ -1148,10 +1134,11 @@
               <ha-icon icon="mdi:radar"></ha-icon>
               <span>${escapeHtml(this._config.title)}</span>
             </div>
-            <div class="hero-title">${escapeHtml(countLabel)} in area</div>
+            <div class="hero-title">${escapeHtml(this._renderHeroTitle(mainFlight))}</div>
             <div class="hero-subtitle">
               ${escapeHtml(location.label)} - ${formatNumber(this._config.radius)} km radius
             </div>
+            ${this._config.show_stats ? this._renderStatsLine(countLabel, enteredEntity, exitedEntity) : ""}
           </div>
           <div class="hero-tools">
             <button
@@ -1174,25 +1161,21 @@
     }
 
     _renderStats(countLabel, enteredEntity, exitedEntity) {
-      return `
-        <div class="stats-grid">
-          ${this._renderStat("mdi:airplane-marker", "Current", countLabel)}
-          ${this._renderStat("mdi:airplane-plus", "Entered", enteredEntity?.state ?? "-")}
-          ${this._renderStat("mdi:airplane-minus", "Exited", exitedEntity?.state ?? "-")}
-          ${this._renderStat("mdi:map-marker-radius", "Radius", `${formatNumber(this._config.radius)} km`)}
-        </div>
-      `;
+      return this._renderStatsLine(countLabel, enteredEntity, exitedEntity);
     }
 
-    _renderStat(icon, label, value) {
+    _renderHeroTitle(mainFlight) {
+      if (!mainFlight) return "No aircraft";
+      return `${mainFlight.flightNumber}, ${mainFlight.aircraft}`;
+    }
+
+    _renderStatsLine(countLabel, enteredEntity, exitedEntity) {
+      const current = escapeHtml(countLabel);
+      const entered = escapeHtml(enteredEntity?.state ?? "-");
+      const exited = escapeHtml(exitedEntity?.state ?? "-");
+      const radius = escapeHtml(`${formatNumber(this._config.radius)} km`);
       return `
-        <div class="stat">
-          <ha-icon icon="${icon}"></ha-icon>
-          <div>
-            <span>${escapeHtml(label)}</span>
-            <strong>${escapeHtml(value)}</strong>
-          </div>
-        </div>
+        <p class="stats-inline">Current ${current} / Entered ${entered} / Exited ${exited} / Radius ${radius}</p>
       `;
     }
 
@@ -1467,18 +1450,10 @@
             .map(
               (flight) => `
                 <article class="activity-item">
-                  <div class="activity-icon">
-                    <ha-icon icon="mdi:airplane"></ha-icon>
-                  </div>
-                  <div class="activity-main">
-                    <div class="activity-topline">
-                      <strong>${escapeHtml(flight.flightNumber)}</strong>
-                      <span>${escapeHtml(formatRelative(flight.lastSeen))}</span>
-                    </div>
-                    <div class="activity-meta">
-                      ${escapeHtml(flight.airline)} - ${escapeHtml(flight.aircraft)}
-                    </div>
-                  </div>
+                  <span class="activity-flight">${escapeHtml(flight.flightNumber)}</span>
+                  <span>${escapeHtml(flight.airline)}</span>
+                  <span>${escapeHtml(this._formatRoute(flight))}</span>
+                  <span>${escapeHtml(flight.aircraft)}</span>
                 </article>
               `,
             )
@@ -1486,6 +1461,11 @@
         </div>
         ${this._renderHistoryError()}
       `;
+    }
+
+    _formatRoute(flight) {
+      if (flight.origin && flight.destination) return `${flight.origin} -> ${flight.destination}`;
+      return flight.origin || flight.destination || "Unknown route";
     }
 
     _renderHistoryError() {
@@ -1617,6 +1597,14 @@
           font-size: 15px;
         }
 
+        .stats-inline {
+          margin: 6px 0 0;
+          color: var(--secondary-text-color, #64748b);
+          font-size: 10px;
+          line-height: 1.4;
+          font-weight: 500;
+        }
+
         .radar-orbit {
           position: relative;
           width: 112px;
@@ -1650,55 +1638,19 @@
           to { transform: rotate(360deg); }
         }
 
-        .stats-grid {
-          display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 6px;
-          padding: 0 16px 10px;
-        }
-
-        .stat {
-          display: flex;
-          align-items: center;
-          gap: 7px;
-          min-width: 0;
-          min-height: 34px;
-          padding: 6px 8px;
-          border: var(--fr24-soft-border);
-          border-radius: 8px;
-          background: color-mix(in srgb, var(--primary-background-color, #f7f9fc) 66%, transparent);
-        }
-
-        .stat ha-icon {
-          --mdc-icon-size: 17px;
-          color: var(--fr24-accent);
-        }
-
-        .stat span,
         .metric span,
         .muted,
-        .activity-meta,
-        .activity-topline span,
         .aircraft-card span,
         .aircraft-card small {
           color: var(--secondary-text-color, #64748b);
         }
 
-        .stat span,
         .metric span {
           display: block;
           font-size: 9px;
           text-transform: uppercase;
           font-weight: 700;
           letter-spacing: 0;
-        }
-
-        .stat strong {
-          display: block;
-          margin-top: 1px;
-          font-size: 14px;
-          line-height: 1.1;
-          overflow-wrap: anywhere;
         }
 
         .panel {
@@ -2072,56 +2024,32 @@
 
         .activity-list {
           display: grid;
-          gap: 8px;
+          gap: 4px;
         }
 
         .activity-item {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          padding: 11px 12px;
-        }
-
-        .activity-icon {
-          width: 38px;
-          height: 38px;
-          border-radius: 8px;
+          box-sizing: border-box;
           display: grid;
-          place-items: center;
-          background: color-mix(in srgb, var(--fr24-accent) 14%, transparent);
-          color: var(--fr24-accent);
-          flex: 0 0 auto;
-        }
-
-        .activity-main {
-          min-width: 0;
-          flex: 1;
-        }
-
-        .activity-topline {
-          display: flex;
-          align-items: baseline;
-          justify-content: space-between;
-          gap: 10px;
-          min-width: 0;
-        }
-
-        .activity-topline strong {
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .activity-topline span {
+          grid-template-columns: minmax(64px, 0.8fr) minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(0, 1.4fr);
+          align-items: center;
+          gap: 8px;
+          min-height: 30px;
+          padding: 4px 8px;
           font-size: 12px;
-          white-space: nowrap;
+          line-height: 1.2;
+          overflow: hidden;
         }
 
-        .activity-meta {
-          margin-top: 2px;
+        .activity-item span {
+          min-width: 0;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
+        }
+
+        .activity-flight {
+          font-weight: 800;
+          color: var(--primary-text-color, #1f2933);
         }
 
         .history-note,
@@ -2161,9 +2089,8 @@
 
         .military .eyebrow,
         .military .hero-subtitle,
+        .military .stats-inline,
         .military .muted,
-        .military .activity-meta,
-        .military .activity-topline span,
         .military .aircraft-card span,
         .military .aircraft-card small,
         .military .mini-flight small,
@@ -2204,7 +2131,6 @@
           background: linear-gradient(60deg, rgba(128, 255, 154, 0.58), transparent 68%);
         }
 
-        .military .stat,
         .military .flight-focus,
         .military .aircraft-card,
         .military .mini-flight,
@@ -2216,14 +2142,12 @@
           box-shadow: inset 0 0 0 1px rgba(255, 212, 95, 0.04);
         }
 
-        .military .stat span,
         .military .metric span {
           color: rgba(128, 255, 154, 0.7);
         }
 
-        .military .stat strong,
         .military .metric strong,
-        .military .activity-topline strong,
+        .military .activity-flight,
         .military .aircraft-card strong,
         .military .mini-flight span {
           color: #eaffef;
@@ -2303,13 +2227,6 @@
           color: #eaffef;
           text-transform: uppercase;
         }
-
-        .military .activity-icon {
-          color: #06110c;
-          background: #80ff9a;
-          border-radius: 6px;
-        }
-
         .compact .hero {
           padding: 16px;
         }
@@ -2318,10 +2235,6 @@
           width: 86px;
           height: 86px;
           flex-basis: 86px;
-        }
-
-        .compact .stats-grid {
-          grid-template-columns: repeat(2, minmax(0, 1fr));
         }
 
         @container (max-width: 720px) {
@@ -2343,13 +2256,8 @@
             flex-basis: 82px;
           }
 
-          .stats-grid,
           .metric-row {
             grid-template-columns: repeat(2, minmax(0, 1fr));
-          }
-
-          .stats-grid {
-            padding: 0 12px 12px;
           }
 
           .overview-grid {
@@ -2376,10 +2284,6 @@
 
           .mode-toggle span {
             display: none;
-          }
-
-          .stats-grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
           }
 
           .metric-row {

@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.9
+
+- Add a Danish military-style DTG column to the activity log, based on each aircraft's last seen time.
+
 ## v0.1.8
 
 - Add NOR, MIL, and ATC radar modes to the card header.

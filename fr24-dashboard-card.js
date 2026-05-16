@@ -1,5 +1,5 @@
 (() => {
-  const CARD_VERSION = "0.1.8";
+  const CARD_VERSION = "0.1.9";
   const DEFAULTS = {
     title: "FlightRadar24",
     entity: "sensor.flightradar24_current_in_area",
@@ -41,6 +41,20 @@
     mil: "MIL",
     atc: "ATC",
   };
+  const DANISH_DTG_MONTHS = [
+    "JAN",
+    "FEB",
+    "MAR",
+    "APR",
+    "MAJ",
+    "JUN",
+    "JUL",
+    "AUG",
+    "SEP",
+    "OKT",
+    "NOV",
+    "DEC",
+  ];
 
   const MAP_PROVIDERS = {
     fr24: {
@@ -413,6 +427,34 @@
     const number = Number(value);
     if (!Number.isFinite(number)) return value || "-";
     return new Intl.NumberFormat(undefined, { maximumFractionDigits }).format(number);
+  }
+
+  function formatDanishMilitaryDtg(value) {
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return "-";
+
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Europe/Copenhagen",
+      year: "2-digit",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(date);
+    const get = (type) => parts.find((part) => part.type === type)?.value || "";
+    const day = get("day");
+    const hour = get("hour");
+    const minute = get("minute");
+    const month = Number(get("month"));
+    const year = get("year");
+    const localYear = Number(`20${year}`);
+    const localUtcTime = Date.UTC(localYear, month - 1, Number(day), Number(hour), Number(minute));
+    const offsetHours = Math.round((localUtcTime - date.getTime()) / 3600000);
+    const zoneLetter = offsetHours >= 2 ? "B" : "A";
+    const monthLabel = DANISH_DTG_MONTHS[month - 1] || "---";
+
+    return `${day}${hour}${minute}${zoneLetter} ${monthLabel} ${year}`;
   }
 
   function radiusToZoom(radius) {
@@ -1650,6 +1692,7 @@
             .map(
               (flight) => `
                 <article class="activity-item">
+                  <span class="activity-dtg">${escapeHtml(formatDanishMilitaryDtg(flight.lastSeen))}</span>
                   <span class="activity-flight">${escapeHtml(flight.flightNumber)}</span>
                   <span>${escapeHtml(flight.airline)}</span>
                   <span>${escapeHtml(this._formatRoute(flight))}</span>
@@ -2493,7 +2536,7 @@
         .activity-item {
           box-sizing: border-box;
           display: grid;
-          grid-template-columns: minmax(64px, 0.8fr) minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(0, 1.4fr);
+          grid-template-columns: minmax(94px, 0.85fr) minmax(58px, 0.7fr) minmax(0, 1.1fr) minmax(0, 1.25fr) minmax(0, 1.3fr);
           align-items: center;
           gap: 8px;
           min-height: 30px;
@@ -2508,6 +2551,14 @@
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
+        }
+
+        .activity-dtg {
+          color: var(--secondary-text-color, #64748b);
+          font-family: var(--code-font-family, "Roboto Mono", monospace);
+          font-size: 11px;
+          font-variant-numeric: tabular-nums;
+          letter-spacing: 0;
         }
 
         .activity-flight {
@@ -2635,6 +2686,8 @@
         .atc .metric strong,
         .military .activity-flight,
         .atc .activity-flight,
+        .military .activity-dtg,
+        .atc .activity-dtg,
         .military .aircraft-card strong,
         .atc .aircraft-card strong,
         .military .mini-flight span,
@@ -2878,6 +2931,17 @@
 
           .route-line ha-icon {
             justify-self: center;
+          }
+
+          .activity-item {
+            grid-template-columns: minmax(80px, 0.85fr) minmax(46px, 0.55fr) minmax(0, 0.9fr) minmax(0, 1fr) minmax(0, 1fr);
+            gap: 5px;
+            padding: 4px 6px;
+            font-size: 11px;
+          }
+
+          .activity-dtg {
+            font-size: 10px;
           }
 
           .map-shell,

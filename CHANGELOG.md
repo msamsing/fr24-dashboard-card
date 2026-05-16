@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.6
+
+- Add a dashboard toggle for Military graphics mode.
+- Add an optional default setting for Military graphics in the visual editor.
+- Restyle the card in Military graphics mode with OPS-room inspired colors, map treatment, and tactical markers.
+- Make the Current, Entered, Exited, and Radius stats much smaller and less prominent.
+
 ## v0.1.5
 
 - Make the local radar map fully independent of external provider URLs.

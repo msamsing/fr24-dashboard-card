@@ -197,8 +197,21 @@ show_map_actions: false
 show_activity: true
 show_aircraft_image: true
 map_height: 420
+military_graphics: false
 compact: false
 ```
+
+## Military Graphics
+
+The existing layout can be switched into an OPS-room inspired visual mode from the dashboard itself. Use the **Military graphics** button in the card header to toggle it on or off.
+
+The choice is stored in the browser's `localStorage`. You can also make the card start in that mode:
+
+```yaml
+military_graphics: true
+```
+
+This is a visual treatment only. It does not change the data source, map provider, or aircraft tracking logic.
 
 ## Activity History
 
@@ -233,7 +246,7 @@ The FlightRadar24 integration exposes `flights` attributes on Current in area, E
 Releases use numeric semantic version tags, for example:
 
 ```text
-v0.1.5
+v0.1.6
 ```
 
 HACS uses GitHub release tag names as the remote version when releases are available, so releases should be installed by version number rather than commit hash.

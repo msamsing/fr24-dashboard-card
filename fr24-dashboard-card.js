@@ -1,5 +1,5 @@
 (() => {
-  const CARD_VERSION = "0.1.5";
+  const CARD_VERSION = "0.1.6";
   const DEFAULTS = {
     title: "FlightRadar24",
     entity: "sensor.flightradar24_current_in_area",
@@ -28,6 +28,7 @@
     remember_sections: true,
     history_source: "recorder",
     activity_entities: [],
+    military_graphics: false,
     compact: false,
   };
 
@@ -260,6 +261,10 @@
       selector: { boolean: {} },
     },
     {
+      name: "military_graphics",
+      selector: { boolean: {} },
+    },
+    {
       name: "compact",
       selector: { boolean: {} },
     },
@@ -296,6 +301,7 @@
     show_activity: "Show activity list",
     show_aircraft_image: "Show aircraft image",
     remember_sections: "Remember opened/closed sections",
+    military_graphics: "Military graphics by default",
     compact: "Compact layout",
   };
 
@@ -573,6 +579,8 @@
       this._historyError = "";
       this._sections = new Map();
       this._sectionStorageKey = "";
+      this._militaryStorageKey = "";
+      this._militaryGraphics = DEFAULTS.military_graphics;
       this._lastEntityStateFingerprint = "";
       this._lastRenderFingerprint = "";
       this._hasRendered = false;
@@ -605,7 +613,9 @@
       if (!config) throw new Error("Configuration is missing");
       this._config = normalizeConfig(config);
       this._sectionStorageKey = this._getSectionStorageKey();
+      this._militaryStorageKey = this._getMilitaryStorageKey();
       this._sections = this._buildInitialSections();
+      this._militaryGraphics = this._loadMilitaryGraphicsState();
       this._loadLocalActivity();
       this._render(true);
     }
@@ -850,6 +860,10 @@
       return `fr24-dashboard-card:sections:${this._config.entity}:${this._config.title}`;
     }
 
+    _getMilitaryStorageKey() {
+      return `fr24-dashboard-card:military:${this._config.entity}:${this._config.title}`;
+    }
+
     _loadSectionState() {
       try {
         return JSON.parse(localStorage.getItem(this._sectionStorageKey) || "{}");
@@ -868,6 +882,31 @@
       } catch {
         // localStorage can be disabled in some kiosk browsers.
       }
+    }
+
+    _loadMilitaryGraphicsState() {
+      try {
+        const stored = localStorage.getItem(this._militaryStorageKey);
+        if (stored === "true") return true;
+        if (stored === "false") return false;
+      } catch {
+        // localStorage can be disabled in some kiosk browsers.
+      }
+      return Boolean(this._config.military_graphics);
+    }
+
+    _saveMilitaryGraphicsState() {
+      try {
+        localStorage.setItem(this._militaryStorageKey, String(this._militaryGraphics));
+      } catch {
+        // localStorage can be disabled in some kiosk browsers.
+      }
+    }
+
+    _toggleMilitaryGraphics() {
+      this._militaryGraphics = !this._militaryGraphics;
+      this._saveMilitaryGraphicsState();
+      this._render(true);
     }
 
     _toggleSection(section) {
@@ -897,6 +936,7 @@
       const currentCount = Number(entity?.state);
       const countLabel = Number.isFinite(currentCount) ? currentCount : currentFlights.length;
       const compactClass = this._config.compact ? " compact" : "";
+      const militaryClass = this._militaryGraphics ? " military" : "";
       const renderFingerprint = this._buildRenderFingerprint({
         currentFlights,
         activityFlights,
@@ -917,7 +957,7 @@
 
       this.shadowRoot.innerHTML = `
         <style>${this._styles()}</style>
-        <ha-card class="fr24-card${compactClass}" style="${this._renderCardStyle()}">
+        <ha-card class="fr24-card${compactClass}${militaryClass}" style="${this._renderCardStyle()}">
           ${this._config.show_header ? this._renderHeader(countLabel, location) : ""}
           ${this._config.show_stats ? this._renderStats(countLabel, enteredEntity, exitedEntity) : ""}
           ${this._renderSection(
@@ -952,6 +992,9 @@
       for (const button of this.shadowRoot.querySelectorAll("[data-section]")) {
         button.addEventListener("click", () => this._toggleSection(button.dataset.section));
       }
+      this.shadowRoot
+        .querySelector("[data-military-toggle]")
+        ?.addEventListener("click", () => this._toggleMilitaryGraphics());
       this._restoreScrollState(scrollState);
     }
 
@@ -975,6 +1018,7 @@
           show_map_actions: this._config.show_map_actions,
           show_activity: this._config.show_activity,
           show_aircraft_image: this._config.show_aircraft_image,
+          military_graphics: this._militaryGraphics,
         },
         countLabel: model.countLabel,
         entered: model.enteredEntity?.state,
@@ -1109,9 +1153,21 @@
               ${escapeHtml(location.label)} - ${formatNumber(this._config.radius)} km radius
             </div>
           </div>
-          <div class="radar-orbit" aria-hidden="true">
-            <div class="sweep"></div>
-            <ha-icon icon="mdi:airplane-marker"></ha-icon>
+          <div class="hero-tools">
+            <button
+              class="mode-toggle ${this._militaryGraphics ? "active" : ""}"
+              type="button"
+              data-military-toggle
+              aria-pressed="${this._militaryGraphics}"
+              title="Toggle military graphics"
+            >
+              <ha-icon icon="mdi:shield-radar"></ha-icon>
+              <span>Military graphics</span>
+            </button>
+            <div class="radar-orbit" aria-hidden="true">
+              <div class="sweep"></div>
+              <ha-icon icon="mdi:airplane-marker"></ha-icon>
+            </div>
           </div>
         </div>
       `;
@@ -1466,6 +1522,24 @@
           scrollbar-width: thin;
         }
 
+        ha-card.fr24-card.military {
+          --fr24-accent: #80ff9a;
+          --fr24-warn: #ffd45f;
+          --fr24-success: #80ff9a;
+          --fr24-soft-border: 1px solid rgba(128, 255, 154, 0.28);
+          position: relative;
+          background:
+            linear-gradient(180deg, rgba(128, 255, 154, 0.05), transparent 34%),
+            repeating-linear-gradient(0deg, rgba(128, 255, 154, 0.035) 0 1px, transparent 1px 7px),
+            #07110d;
+          color: #d9ffe2;
+          border: 1px solid rgba(128, 255, 154, 0.36);
+          box-shadow:
+            inset 0 0 0 1px rgba(255, 212, 95, 0.08),
+            0 0 28px rgba(128, 255, 154, 0.12);
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        }
+
         .hero {
           display: flex;
           justify-content: space-between;
@@ -1478,6 +1552,41 @@
 
         .hero-copy {
           min-width: 0;
+        }
+
+        .hero-tools {
+          display: grid;
+          justify-items: end;
+          align-content: start;
+          gap: 10px;
+          flex: 0 0 auto;
+        }
+
+        .mode-toggle {
+          min-height: 32px;
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          padding: 0 10px;
+          border: var(--fr24-soft-border);
+          border-radius: 8px;
+          background: color-mix(in srgb, var(--primary-background-color, #f7f9fc) 70%, transparent);
+          color: var(--primary-text-color, #1f2933);
+          cursor: pointer;
+          font: inherit;
+          font-size: 12px;
+          font-weight: 800;
+          white-space: nowrap;
+        }
+
+        .mode-toggle ha-icon {
+          --mdc-icon-size: 17px;
+          color: var(--fr24-accent);
+        }
+
+        .mode-toggle.active {
+          background: color-mix(in srgb, var(--fr24-accent) 18%, transparent);
+          border-color: color-mix(in srgb, var(--fr24-accent) 46%, transparent);
         }
 
         .eyebrow {
@@ -1544,22 +1653,24 @@
         .stats-grid {
           display: grid;
           grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 10px;
-          padding: 0 16px 16px;
+          gap: 6px;
+          padding: 0 16px 10px;
         }
 
         .stat {
           display: flex;
           align-items: center;
-          gap: 10px;
+          gap: 7px;
           min-width: 0;
-          padding: 12px;
+          min-height: 34px;
+          padding: 6px 8px;
           border: var(--fr24-soft-border);
           border-radius: 8px;
           background: color-mix(in srgb, var(--primary-background-color, #f7f9fc) 66%, transparent);
         }
 
         .stat ha-icon {
+          --mdc-icon-size: 17px;
           color: var(--fr24-accent);
         }
 
@@ -1576,7 +1687,7 @@
         .stat span,
         .metric span {
           display: block;
-          font-size: 11px;
+          font-size: 9px;
           text-transform: uppercase;
           font-weight: 700;
           letter-spacing: 0;
@@ -1584,8 +1695,8 @@
 
         .stat strong {
           display: block;
-          margin-top: 2px;
-          font-size: 20px;
+          margin-top: 1px;
+          font-size: 14px;
           line-height: 1.1;
           overflow-wrap: anywhere;
         }
@@ -2040,6 +2151,165 @@
           font-size: 12px;
         }
 
+        .military .hero {
+          background:
+            linear-gradient(135deg, rgba(128, 255, 154, 0.15), transparent 48%),
+            repeating-linear-gradient(90deg, rgba(128, 255, 154, 0.04) 0 1px, transparent 1px 22px),
+            #08150f;
+          border-bottom: 1px solid rgba(128, 255, 154, 0.18);
+        }
+
+        .military .eyebrow,
+        .military .hero-subtitle,
+        .military .muted,
+        .military .activity-meta,
+        .military .activity-topline span,
+        .military .aircraft-card span,
+        .military .aircraft-card small,
+        .military .mini-flight small,
+        .military .chevron {
+          color: rgba(217, 255, 226, 0.68);
+        }
+
+        .military .hero-title,
+        .military .flight-number {
+          color: #f0fff3;
+          text-shadow: 0 0 14px rgba(128, 255, 154, 0.26);
+        }
+
+        .military .mode-toggle {
+          color: #d9ffe2;
+          background: rgba(4, 12, 8, 0.78);
+          border-color: rgba(128, 255, 154, 0.32);
+          text-transform: uppercase;
+        }
+
+        .military .mode-toggle.active {
+          color: #06110c;
+          background: #80ff9a;
+          box-shadow: 0 0 18px rgba(128, 255, 154, 0.28);
+        }
+
+        .military .mode-toggle.active ha-icon {
+          color: #06110c;
+        }
+
+        .military .radar-orbit {
+          border-color: rgba(128, 255, 154, 0.42);
+          background:
+            radial-gradient(circle, rgba(128, 255, 154, 0.25) 0 8%, transparent 9% 30%, rgba(128, 255, 154, 0.14) 31% 32%, transparent 33% 58%, rgba(128, 255, 154, 0.12) 59% 60%, transparent 61%);
+        }
+
+        .military .sweep {
+          background: linear-gradient(60deg, rgba(128, 255, 154, 0.58), transparent 68%);
+        }
+
+        .military .stat,
+        .military .flight-focus,
+        .military .aircraft-card,
+        .military .mini-flight,
+        .military .activity-item,
+        .military .empty-state,
+        .military .history-note {
+          background: rgba(5, 17, 11, 0.82);
+          border-color: rgba(128, 255, 154, 0.24);
+          box-shadow: inset 0 0 0 1px rgba(255, 212, 95, 0.04);
+        }
+
+        .military .stat span,
+        .military .metric span {
+          color: rgba(128, 255, 154, 0.7);
+        }
+
+        .military .stat strong,
+        .military .metric strong,
+        .military .activity-topline strong,
+        .military .aircraft-card strong,
+        .military .mini-flight span {
+          color: #eaffef;
+        }
+
+        .military .metric {
+          background: rgba(128, 255, 154, 0.07);
+          border: 1px solid rgba(128, 255, 154, 0.12);
+        }
+
+        .military .live-badge {
+          color: #06110c;
+          background: #ffd45f;
+          border-radius: 6px;
+          text-transform: uppercase;
+        }
+
+        .military .local-map-shell,
+        .military .map-shell {
+          background: #06110c;
+          border-color: rgba(128, 255, 154, 0.34);
+          box-shadow: inset 0 0 34px rgba(128, 255, 154, 0.08);
+        }
+
+        .military .local-map-shell::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
+          background:
+            linear-gradient(rgba(128, 255, 154, 0.16) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(128, 255, 154, 0.16) 1px, transparent 1px);
+          background-size: 48px 48px;
+          mix-blend-mode: screen;
+          opacity: 0.35;
+        }
+
+        .military .tile-grid img {
+          filter: grayscale(1) brightness(0.42) sepia(0.8) hue-rotate(72deg) saturate(1.6);
+        }
+
+        .military .radius-ring {
+          border-color: #ffd45f;
+          border-style: dashed;
+          background: rgba(255, 212, 95, 0.08);
+          box-shadow: 0 0 26px rgba(255, 212, 95, 0.18);
+        }
+
+        .military .home-marker {
+          background: #07110d;
+          border-color: #ffd45f;
+          box-shadow: 0 0 18px rgba(255, 212, 95, 0.4);
+        }
+
+        .military .plane-marker {
+          color: #06110c;
+          background: #80ff9a;
+          border-color: #ffd45f;
+          border-radius: 6px;
+          box-shadow: 0 0 18px rgba(128, 255, 154, 0.32);
+        }
+
+        .military .map-overlay span,
+        .military .map-actions a,
+        .military .map-attribution {
+          color: #d9ffe2;
+          background: rgba(4, 12, 8, 0.84);
+          border: 1px solid rgba(128, 255, 154, 0.24);
+          text-transform: uppercase;
+        }
+
+        .military .panel {
+          border-top-color: rgba(128, 255, 154, 0.18);
+        }
+
+        .military .panel-title {
+          color: #eaffef;
+          text-transform: uppercase;
+        }
+
+        .military .activity-icon {
+          color: #06110c;
+          background: #80ff9a;
+          border-radius: 6px;
+        }
+
         .compact .hero {
           padding: 16px;
         }
@@ -2104,7 +2374,14 @@
             display: none;
           }
 
-          .stats-grid,
+          .mode-toggle span {
+            display: none;
+          }
+
+          .stats-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
           .metric-row {
             grid-template-columns: 1fr;
           }

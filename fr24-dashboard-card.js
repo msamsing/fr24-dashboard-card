@@ -1,5 +1,5 @@
 (() => {
-  const CARD_VERSION = "0.1.10";
+  const CARD_VERSION = "0.1.11";
   const ACTIVITY_CACHE_HOURS = 24;
   const ACTIVITY_CACHE_LIMIT = 300;
   const DEFAULTS = {
@@ -34,11 +34,18 @@
     activity_entities: [],
     radar_mode: "nor",
     radar_map_lines: true,
+    listen_events: true,
     military_graphics: false,
     compact: false,
   };
 
   const RADAR_MODES = ["nor", "mil", "atc"];
+  const FR24_ACTIVITY_EVENTS = [
+    "flightradar24_entry",
+    "flightradar24_exit",
+    "flightradar24_area_landed",
+    "flightradar24_area_took_off",
+  ];
   const RADAR_MODE_LABELS = {
     nor: "NOR",
     mil: "MIL",
@@ -268,6 +275,10 @@
       selector: { entity: { multiple: true, domain: "sensor" } },
     },
     {
+      name: "listen_events",
+      selector: { boolean: {} },
+    },
+    {
       name: "radar_mode",
       selector: {
         select: {
@@ -343,6 +354,7 @@
     default_open: "Sections open by default",
     history_source: "Activity source",
     activity_entities: "Additional activity sensors",
+    listen_events: "Listen for FlightRadar24 events",
     radar_mode: "Default radar mode",
     radar_map_lines: "Show map line layer in MIL/ATC",
     show_header: "Show header",
@@ -355,8 +367,25 @@
     compact: "Compact layout",
   };
 
+  function numericValue(value, fallback = NaN) {
+    if (typeof value === "number") return Number.isFinite(value) ? value : fallback;
+    if (typeof value === "string") {
+      const normalized = value
+        .trim()
+        .replace(/\s/g, "")
+        .replace(",", ".")
+        .match(/-?\d+(\.\d+)?/);
+      if (normalized) {
+        const number = Number(normalized[0]);
+        if (Number.isFinite(number)) return number;
+      }
+    }
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
+  }
+
   function fixed(value) {
-    return Number(value || 0).toFixed(5);
+    return numericValue(value, 0).toFixed(5);
   }
 
   function normalizeConfig(config) {
@@ -390,6 +419,8 @@
         config.radar_map_lines === undefined
           ? DEFAULTS.radar_map_lines
           : Boolean(config.radar_map_lines),
+      listen_events:
+        config.listen_events === undefined ? DEFAULTS.listen_events : Boolean(config.listen_events),
     };
   }
 
@@ -400,7 +431,7 @@
   }
 
   function numberOrDefault(value, fallback) {
-    const number = Number(value);
+    const number = numericValue(value);
     return Number.isFinite(number) ? number : fallback;
   }
 
@@ -437,7 +468,7 @@
   }
 
   function formatNumber(value, maximumFractionDigits = 0) {
-    const number = Number(value);
+    const number = numericValue(value);
     if (!Number.isFinite(number)) return value || "-";
     return new Intl.NumberFormat(undefined, { maximumFractionDigits }).format(number);
   }
@@ -481,8 +512,8 @@
   }
 
   function latLonToTile(lat, lon, zoom) {
-    const latitude = clamp(Number(lat), -85.05112878, 85.05112878);
-    const longitude = Number(lon);
+    const latitude = clamp(numericValue(lat, 0), -85.05112878, 85.05112878);
+    const longitude = numericValue(lon, 0);
     const latRad = (latitude * Math.PI) / 180;
     const scale = 2 ** zoom;
     return {
@@ -513,31 +544,36 @@
   }
 
   function metersPerPixel(lat, zoom) {
-    return (156543.03392 * Math.cos((Number(lat) * Math.PI) / 180)) / 2 ** zoom;
+    return (156543.03392 * Math.cos((numericValue(lat, 0) * Math.PI) / 180)) / 2 ** zoom;
   }
 
   function distanceBetweenKm(latA, lonA, latB, lonB) {
     const toRadians = (degrees) => (degrees * Math.PI) / 180;
     const earthRadiusKm = 6371;
-    const dLat = toRadians(Number(latB) - Number(latA));
-    const dLon = toRadians(Number(lonB) - Number(lonA));
+    const startLat = numericValue(latA);
+    const startLon = numericValue(lonA);
+    const endLat = numericValue(latB);
+    const endLon = numericValue(lonB);
+    if (![startLat, startLon, endLat, endLon].every(Number.isFinite)) return NaN;
+    const dLat = toRadians(endLat - startLat);
+    const dLon = toRadians(endLon - startLon);
     const a =
       Math.sin(dLat / 2) ** 2 +
-      Math.cos(toRadians(Number(latA))) *
-        Math.cos(toRadians(Number(latB))) *
+      Math.cos(toRadians(startLat)) *
+        Math.cos(toRadians(endLat)) *
         Math.sin(dLon / 2) ** 2;
     return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
   function getFlightDistanceKm(flight, location) {
-    const distance = Number(flight?.distance);
+    const distance = numericValue(flight?.distance);
     if (Number.isFinite(distance)) return distance;
     if (
       location &&
       hasValue(flight?.latitude) &&
       hasValue(flight?.longitude) &&
-      Number.isFinite(Number(location.lat)) &&
-      Number.isFinite(Number(location.lon))
+      Number.isFinite(numericValue(location.lat)) &&
+      Number.isFinite(numericValue(location.lon))
     ) {
       return distanceBetweenKm(location.lat, location.lon, flight.latitude, flight.longitude);
     }
@@ -548,6 +584,15 @@
     if (hasValue(flight.distance)) return flight;
     const distance = getFlightDistanceKm(flight, location);
     return Number.isFinite(distance) ? { ...flight, distance } : flight;
+  }
+
+  function hasCoordinates(flight) {
+    return (
+      hasValue(flight?.latitude) &&
+      hasValue(flight?.longitude) &&
+      Number.isFinite(numericValue(flight.latitude)) &&
+      Number.isFinite(numericValue(flight.longitude))
+    );
   }
 
   function asArray(value) {
@@ -564,7 +609,17 @@
     try {
       return JSON.parse(trimmed);
     } catch {
-      return value;
+      try {
+        return JSON.parse(
+          trimmed
+            .replace(/\bNone\b/g, "null")
+            .replace(/\bTrue\b/g, "true")
+            .replace(/\bFalse\b/g, "false")
+            .replace(/'/g, '"'),
+        );
+      } catch {
+        return value;
+      }
     }
   }
 
@@ -689,6 +744,8 @@
       this._radarMapLinesStorageKey = "";
       this._radarMode = DEFAULTS.radar_mode;
       this._radarMapLines = DEFAULTS.radar_map_lines;
+      this._eventUnsubscribers = [];
+      this._eventSubscriptionHass = null;
       this._lastEntityStateFingerprint = "";
       this._lastRenderFingerprint = "";
       this._hasRendered = false;
@@ -727,15 +784,21 @@
       this._sections = this._buildInitialSections();
       this._radarMode = this._loadRadarModeState();
       this._radarMapLines = this._loadRadarMapLinesState();
+      if (!this._config.listen_events) this._clearEventSubscriptions();
       this._loadLocalActivity();
       this._render(true);
     }
 
     set hass(hass) {
       this._hass = hass;
+      this._ensureEventSubscriptions();
       const activityChanged = this._syncActivitySources();
       this._loadRecorderHistory();
       this._render(activityChanged);
+    }
+
+    disconnectedCallback() {
+      this._clearEventSubscriptions();
     }
 
     getCardSize() {
@@ -759,6 +822,63 @@
         rows,
         min_rows: 6,
       };
+    }
+
+    _ensureEventSubscriptions() {
+      if (!this._config.listen_events || !this._hass?.connection?.subscribeEvents) return;
+      if (this._eventSubscriptionHass === this._hass) return;
+
+      this._clearEventSubscriptions();
+      this._eventSubscriptionHass = this._hass;
+
+      for (const eventType of FR24_ACTIVITY_EVENTS) {
+        Promise.resolve(
+          this._hass.connection.subscribeEvents(
+            (event) => this._handleActivityEvent(event),
+            eventType,
+          ),
+        )
+          .then((unsubscribe) => {
+            if (this._eventSubscriptionHass === this._hass && typeof unsubscribe === "function") {
+              this._eventUnsubscribers.push(unsubscribe);
+            } else if (typeof unsubscribe === "function") {
+              unsubscribe();
+            }
+          })
+          .catch(() => {
+            // Some Home Assistant frontends do not expose event subscriptions to custom cards.
+          });
+      }
+    }
+
+    _clearEventSubscriptions() {
+      for (const unsubscribe of this._eventUnsubscribers.splice(0)) {
+        try {
+          unsubscribe();
+        } catch {
+          // Subscription was already closed.
+        }
+      }
+      this._eventSubscriptionHass = null;
+    }
+
+    _handleActivityEvent(event) {
+      const seenAt = new Date(event?.time_fired || Date.now()).getTime();
+      const flights = asFlightList(event?.data);
+      if (!flights.length) return;
+
+      let changed = false;
+      for (const flight of flights) {
+        const normalized = normalizeFlight(flight, seenAt);
+        const existing = this._activity.get(normalized.key);
+        this._activity.set(normalized.key, mergeActivity(existing, normalized));
+        changed = true;
+      }
+
+      if (!changed) return;
+      this._pruneActivity();
+      this._saveLocalActivity();
+      this._render(true);
     }
 
     _syncActivitySources() {
@@ -877,11 +997,11 @@
 
     _getLocation() {
       const fromConfig =
-        Number.isFinite(Number(this._config.latitude)) &&
-        Number.isFinite(Number(this._config.longitude))
+        Number.isFinite(numericValue(this._config.latitude)) &&
+        Number.isFinite(numericValue(this._config.longitude))
           ? {
-              lat: Number(this._config.latitude),
-              lon: Number(this._config.longitude),
+              lat: numericValue(this._config.latitude),
+              lon: numericValue(this._config.longitude),
               label: "Fixed position",
             }
           : null;
@@ -896,8 +1016,8 @@
 
       if (hasValue(trackerLat) && hasValue(trackerLon)) {
         return {
-          lat: Number(trackerLat),
-          lon: Number(trackerLon),
+          lat: numericValue(trackerLat, 0),
+          lon: numericValue(trackerLon, 0),
           label: tracker.attributes?.friendly_name || this._config.location_entity,
         };
       }
@@ -905,8 +1025,8 @@
       if (fromConfig) return fromConfig;
 
       return {
-        lat: Number(this._hass?.config?.latitude || 0),
-        lon: Number(this._hass?.config?.longitude || 0),
+        lat: numericValue(this._hass?.config?.latitude, 0),
+        lon: numericValue(this._hass?.config?.longitude, 0),
         label: "Home Assistant",
       };
     }
@@ -921,7 +1041,7 @@
     }
 
     _getCurrentDisplayFlights(trackedFlights, location) {
-      const radius = Number(this._config.current_radius);
+      const radius = numericValue(this._config.current_radius);
       if (!Number.isFinite(radius) || radius <= 0) return trackedFlights;
       return trackedFlights.filter((flight) => {
         const distance = getFlightDistanceKm(flight, location);
@@ -1113,15 +1233,18 @@
       const currentFlights = this._getCurrentDisplayFlights(trackedFlights, location);
       const mainFlight = currentFlights
         .slice()
-        .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity))[0];
+        .sort(
+          (a, b) =>
+            numericValue(a.distance, Infinity) - numericValue(b.distance, Infinity),
+        )[0];
       const activityFlights = this._getActivityFlights();
       const entity = this._getEntity(this._config.entity);
       const enteredEntity = this._getEntity(this._config.entered_entity);
       const exitedEntity = this._getEntity(this._config.exited_entity);
       const mapUrl = this._buildMapUrl(location);
-      const currentCount = Number(entity?.state);
+      const currentCount = numericValue(entity?.state);
       const countLabel =
-        Number(this._config.current_radius) > 0
+        numericValue(this._config.current_radius, 0) > 0
           ? currentFlights.length
           : Number.isFinite(currentCount)
             ? currentCount
@@ -1425,7 +1548,7 @@
       const entered = escapeHtml(enteredEntity?.state ?? "-");
       const exited = escapeHtml(exitedEntity?.state ?? "-");
       const mapRadius = escapeHtml(`${formatNumber(this._config.radius)} km`);
-      const currentRadius = Number(this._config.current_radius);
+      const currentRadius = numericValue(this._config.current_radius);
       const currentRadiusLabel =
         Number.isFinite(currentRadius) && currentRadius > 0
           ? ` / Current radius ${escapeHtml(`${formatNumber(currentRadius)} km`)}`
@@ -1594,16 +1717,15 @@
       const gridSize = tileSize * tileRange.length;
       const radiusPixels = Math.max(
         34,
-        (Number(this._config.radius) * 1000) / metersPerPixel(location.lat, zoom),
+        (numericValue(this._config.radius, DEFAULTS.radius) * 1000) /
+          metersPerPixel(location.lat, zoom),
       );
-      const currentRadius = Number(this._config.current_radius);
+      const currentRadius = numericValue(this._config.current_radius);
       const currentRadiusPixels =
         Number.isFinite(currentRadius) && currentRadius > 0
           ? Math.max(18, (currentRadius * 1000) / metersPerPixel(location.lat, zoom))
           : 0;
-      const plottedFlights = trackedFlights.filter(
-        (flight) => hasValue(flight.latitude) && hasValue(flight.longitude),
-      );
+      const plottedFlights = trackedFlights.filter((flight) => hasCoordinates(flight));
 
       return `
         <div class="local-map-shell">
@@ -1654,7 +1776,7 @@
           <div class="map-overlay">
             <span><ha-icon icon="mdi:crosshairs-gps"></ha-icon>${fixed(location.lat)}, ${fixed(location.lon)}</span>
             <span><ha-icon icon="mdi:map-marker-radius"></ha-icon>${formatNumber(this._config.radius)} km</span>
-            <span><ha-icon icon="mdi:airplane"></ha-icon>${plottedFlights.length} plotted</span>
+            <span><ha-icon icon="mdi:airplane"></ha-icon>${plottedFlights.length}/${trackedFlights.length} plotted</span>
           </div>
           ${
             this._config.show_map_actions && externalMapUrl
@@ -1706,17 +1828,17 @@
     }
 
     _getRadarStats(plottedFlights) {
-      const speeds = plottedFlights.map((flight) => Number(flight.speed)).filter(Number.isFinite);
+      const speeds = plottedFlights.map((flight) => numericValue(flight.speed)).filter(Number.isFinite);
       const altitudes = plottedFlights
-        .map((flight) => Number(flight.altitude))
+        .map((flight) => numericValue(flight.altitude))
         .filter(Number.isFinite);
       const distances = plottedFlights
-        .map((flight) => Number(flight.distance))
+        .map((flight) => numericValue(flight.distance))
         .filter(Number.isFinite);
       const maxSpeed = speeds.length ? Math.max(...speeds) : null;
       const maxAltitude = altitudes.length ? Math.max(...altitudes) : null;
       const nearest = distances.length ? Math.min(...distances) : null;
-      const radius = Number(this._config.radius) || DEFAULTS.radius;
+      const radius = numericValue(this._config.radius, DEFAULTS.radius);
 
       return {
         count: plottedFlights.length,
@@ -1735,10 +1857,10 @@
       const point = latLonToTile(flight.latitude, flight.longitude, zoom);
       const x = (point.x - center.x) * 256;
       const y = (point.y - center.y) * 256;
-      const headingValue = Number(flight.heading || 0);
+      const headingValue = numericValue(flight.heading, 0);
       const heading = Number.isFinite(headingValue) ? headingValue : 0;
-      const speed = Number(flight.speed);
-      const altitude = Number(flight.altitude);
+      const speed = numericValue(flight.speed);
+      const altitude = numericValue(flight.altitude);
       const trackLength = clamp((Number.isFinite(speed) ? speed : 220) / 600 * 58, 18, 58);
       const speedLabel = Number.isFinite(speed) ? `${formatNumber(speed)} kts` : "- kts";
       const altitudeLabel = Number.isFinite(altitude) ? `${formatNumber(altitude)} ft` : "- ft";

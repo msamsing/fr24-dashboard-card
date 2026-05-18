@@ -206,6 +206,7 @@ show_aircraft_image: true
 map_height: 420
 radar_mode: nor
 radar_map_lines: true
+listen_events: true
 map_line_tile_url_template: "https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png"
 compact: false
 ```
@@ -240,10 +241,13 @@ map_line_tile_url_template: "https://example.com/tiles/{z}/{x}/{y}.png"
 
 The card first tries to read the last 24 hours from Home Assistant Recorder through the frontend WebSocket API. It also keeps a 24-hour browser-side activity cache so recently seen aircraft can still appear when Recorder history is unavailable or does not include the needed attributes. The `history_hours` option only controls which cached entries are shown.
 
+While the card is open, it also listens for FlightRadar24 entry, exit, landing, and takeoff events and stores those flights in the same local cache:
+
 ```yaml
 history_hours: 12
 max_activity_items: 20
 history_source: recorder
+listen_events: true
 entered_entity: sensor.flightradar24_entered_area
 exited_entity: sensor.flightradar24_exited_area
 ```
@@ -262,14 +266,14 @@ activity_entities:
   - sensor.flightradar24_additional_tracked
 ```
 
-The FlightRadar24 integration exposes `flights` attributes on Current in area, Entered area, Exited area, and Additional tracked sensors. If you want a longer event-style history, create a Home Assistant template sensor from the integration's `flightradar24_entry` or `flightradar24_exit` events and add it to `activity_entities`.
+The FlightRadar24 integration exposes `flights` attributes on Current in area, Entered area, Exited area, and Additional tracked sensors. For consistent history across different browsers/devices, create a Home Assistant template sensor from the integration's `flightradar24_entry` or `flightradar24_exit` events and add it to `activity_entities`.
 
 ## Versioning
 
 Releases use numeric semantic version tags, for example:
 
 ```text
-v0.1.10
+v0.1.11
 ```
 
 HACS uses GitHub release tag names as the remote version when releases are available, so releases should be installed by version number rather than commit hash.

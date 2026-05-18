@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.11
+
+- Listen for live FlightRadar24 entry/exit/area events and add them to the 24-hour activity cache while the card is open.
+- Parse numeric values more tolerantly so coordinates, distance, speed, and altitude still work when Home Assistant provides formatted strings.
+- Show plotted/received aircraft counts on the local map to make missing coordinates visible.
+
 ## v0.1.10
 
 - Store and load a fixed 24-hour activity cache, while filtering the displayed list by `history_hours`.

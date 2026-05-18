@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.12
+
+- Add detailed UI descriptions to the Home Assistant visual editor schema.
+- Add a compact Configuration help section with hover text for all card options.
+
 ## v0.1.11
 
 - Listen for live FlightRadar24 entry/exit/area events and add them to the 24-hour activity cache while the card is open.

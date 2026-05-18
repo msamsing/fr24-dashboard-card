@@ -15,7 +15,7 @@ The card is designed for the FlightRadar24 Home Assistant integration, but it is
 - Collapsible sections for current aircraft, map, and activity.
 - Scalable width and height for Home Assistant Sections layouts.
 - Optional fixed card height and per-section scroll areas.
-- Visual configuration editor in Home Assistant.
+- Visual configuration editor in Home Assistant with field descriptions and a compact help section.
 - Uses Home Assistant's configured location, a location entity, or fixed coordinates.
 - Radar modes: NOR, MIL, and ATC with live aircraft-derived overlays.
 
@@ -273,7 +273,7 @@ The FlightRadar24 integration exposes `flights` attributes on Current in area, E
 Releases use numeric semantic version tags, for example:
 
 ```text
-v0.1.11
+v0.1.12
 ```
 
 HACS uses GitHub release tag names as the remote version when releases are available, so releases should be installed by version number rather than commit hash.

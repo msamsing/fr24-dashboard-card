@@ -1,5 +1,5 @@
 (() => {
-  const CARD_VERSION = "0.1.11";
+  const CARD_VERSION = "0.1.12";
   const ACTIVITY_CACHE_HOURS = 24;
   const ACTIVITY_CACHE_LIMIT = 300;
   const DEFAULTS = {
@@ -365,6 +365,76 @@
     show_aircraft_image: "Show aircraft image",
     remember_sections: "Remember opened/closed sections",
     compact: "Compact layout",
+  };
+
+  const EDITOR_DESCRIPTIONS = {
+    entity:
+      "The FlightRadar24 Current in area sensor. The card reads live aircraft from its flights/aircraft/items attributes.",
+    entered_entity:
+      "Optional FlightRadar24 Entered area sensor. Used for the small entered counter and activity sources.",
+    exited_entity:
+      "Optional FlightRadar24 Exited area sensor. Used for the small exited counter and activity sources.",
+    title: "Title shown in the card header.",
+    location_entity:
+      "Optional person, device_tracker, or zone entity used as the radar center. If empty, Home Assistant's configured location is used.",
+    latitude:
+      "Fixed latitude for the radar center. Used only when no location entity is selected.",
+    longitude:
+      "Fixed longitude for the radar center. Used only when no location entity is selected.",
+    radius:
+      "Map radius in kilometers. This should normally match the radius configured in the FlightRadar24 integration.",
+    current_radius:
+      "Optional smaller radius for the Current Aircraft header and overview. Set to 0 to show every aircraft reported by the FlightRadar24 current sensor.",
+    history_hours:
+      "How many hours to show from the 24-hour activity cache. The card still stores and loads up to 24 hours.",
+    max_activity_items:
+      "Maximum number of rows shown in the activity log.",
+    map_render_mode:
+      "Local radar map plots aircraft from Home Assistant data. Embedded provider map uses an external iframe URL.",
+    map_provider:
+      "External provider used when map render mode is set to Embedded provider map.",
+    map_url_template:
+      "Custom external map URL. You can use {lat}, {lon}, {radius}, and {zoom}.",
+    tile_url_template:
+      "Tile URL used by the normal local radar map. Use {z}, {x}, and {y}.",
+    map_line_tile_url_template:
+      "Tile URL used for green line-map rendering behind MIL and ATC radar modes. Use {z}, {x}, and {y}.",
+    map_login_url:
+      "Optional account login URL shown by the map action buttons.",
+    map_height:
+      "Height of the map section in pixels.",
+    card_height:
+      "Optional total card height in pixels. Set to 0 for automatic height.",
+    section_max_height:
+      "Optional maximum height for each open section. Set to 0 for automatic section height.",
+    grid_columns:
+      "Preferred width in Home Assistant Sections layout.",
+    grid_rows:
+      "Preferred height in Home Assistant Sections layout. Set to 0 for automatic sizing.",
+    default_open:
+      "Sections that are open when the card first loads or when remembered section state is unavailable.",
+    history_source:
+      "Recorder + local memory loads Home Assistant Recorder history and browser cache. Local memory only skips Recorder.",
+    activity_entities:
+      "Additional sensors with flights/aircraft/items attributes to include in the activity cache.",
+    listen_events:
+      "Listen for live FlightRadar24 entry, exit, landing, and takeoff events while the card is open.",
+    radar_mode:
+      "Initial radar visual mode. NOR is normal, MIL is military-style graphics, and ATC is compact controller-style targets.",
+    radar_map_lines:
+      "Default visibility for the green map line layer in MIL and ATC modes.",
+    show_header: "Show or hide the top header with title, mode controls, and headline aircraft.",
+    show_stats:
+      "Show or hide the compact Current, Entered, Exited, map radius, and current radius text.",
+    show_map: "Show or hide the radar/map section.",
+    show_map_actions:
+      "Show buttons for opening the external map and provider login URL.",
+    show_activity: "Show or hide the activity log section.",
+    show_aircraft_image:
+      "Show aircraft image/placeholder in the Current Aircraft section.",
+    remember_sections:
+      "Remember opened and closed dashboard sections in this browser profile.",
+    compact: "Reduce vertical spacing for denser dashboards.",
   };
 
   function numericValue(value, fallback = NaN) {
@@ -3251,11 +3321,55 @@
             font-size: 12px;
             line-height: 1.45;
           }
+          .editor-help {
+            margin: 12px 0 0;
+            border: 1px solid var(--divider-color, rgba(127, 127, 127, 0.24));
+            border-radius: 8px;
+            padding: 0 12px;
+            color: var(--primary-text-color);
+            background: color-mix(in srgb, var(--card-background-color, #fff) 94%, var(--primary-background-color, #f7f9fc));
+          }
+          .editor-help summary {
+            cursor: pointer;
+            min-height: 42px;
+            display: flex;
+            align-items: center;
+            font-weight: 600;
+          }
+          .help-list {
+            display: grid;
+            gap: 8px;
+            padding: 0 0 12px;
+          }
+          .help-item {
+            display: grid;
+            grid-template-columns: minmax(120px, 0.45fr) minmax(0, 1fr);
+            gap: 10px;
+            font-size: 12px;
+            line-height: 1.35;
+          }
+          .help-item b {
+            color: var(--primary-text-color);
+            font-weight: 700;
+          }
+          .help-item span {
+            color: var(--secondary-text-color);
+          }
+          @media (max-width: 520px) {
+            .help-item {
+              grid-template-columns: 1fr;
+              gap: 2px;
+            }
+          }
         </style>
         <ha-form></ha-form>
         <div class="hint">
           Custom URLs can use {lat}, {lon}, {radius}, and {zoom}.
         </div>
+        <details class="editor-help">
+          <summary>Configuration help</summary>
+          <div class="help-list">${this._renderHelpItems()}</div>
+        </details>
       `;
 
       const form = this.shadowRoot.querySelector("ha-form");
@@ -3270,7 +3384,10 @@
       if (form) {
         form.hass = this._hass;
         form.data = this._config;
-        form.schema = EDITOR_SCHEMA;
+        form.schema = EDITOR_SCHEMA.map((schema) => ({
+          ...schema,
+          description: EDITOR_DESCRIPTIONS[schema.name],
+        }));
         form.computeLabel = this._computeLabel;
       }
     }
@@ -3288,6 +3405,19 @@
 
     _computeLabel(schema) {
       return EDITOR_LABELS[schema.name] || schema.name;
+    }
+
+    _renderHelpItems() {
+      return EDITOR_SCHEMA.map((schema) => {
+        const label = EDITOR_LABELS[schema.name] || schema.name;
+        const description = EDITOR_DESCRIPTIONS[schema.name] || "";
+        return `
+          <div class="help-item" title="${escapeHtml(description)}">
+            <b>${escapeHtml(label)}</b>
+            <span>${escapeHtml(description)}</span>
+          </div>
+        `;
+      }).join("");
     }
 
     _cleanConfig(config) {

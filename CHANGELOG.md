@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.10
+
+- Store and load a fixed 24-hour activity cache, while filtering the displayed list by `history_hours`.
+- Load 24 hours from Home Assistant Recorder so dashboards can rebuild activity history more consistently.
+- Add `current_radius` for filtering the Current Aircraft header/section separately from the map radius.
+- Keep the local map based on all tracked aircraft reported by the configured current sensor.
+
 ## v0.1.9
 
 - Add a Danish military-style DTG column to the activity log, based on each aircraft's last seen time.

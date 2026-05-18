@@ -1,5 +1,7 @@
 (() => {
-  const CARD_VERSION = "0.1.9";
+  const CARD_VERSION = "0.1.10";
+  const ACTIVITY_CACHE_HOURS = 24;
+  const ACTIVITY_CACHE_LIMIT = 300;
   const DEFAULTS = {
     title: "FlightRadar24",
     entity: "sensor.flightradar24_current_in_area",
@@ -7,6 +9,7 @@
     exited_entity: "sensor.flightradar24_exited_area",
     location_entity: "",
     radius: 25,
+    current_radius: 0,
     history_hours: 6,
     max_activity_items: 12,
     map_render_mode: "local",
@@ -166,8 +169,12 @@
       selector: { number: { min: 1, max: 500, mode: "box", unit_of_measurement: "km" } },
     },
     {
+      name: "current_radius",
+      selector: { number: { min: 0, max: 500, mode: "box", unit_of_measurement: "km" } },
+    },
+    {
       name: "history_hours",
-      selector: { number: { min: 1, max: 168, mode: "box", unit_of_measurement: "h" } },
+      selector: { number: { min: 1, max: 24, mode: "box", unit_of_measurement: "h" } },
     },
     {
       name: "max_activity_items",
@@ -319,6 +326,7 @@
     latitude: "Fixed latitude",
     longitude: "Fixed longitude",
     radius: "Radius",
+    current_radius: "Current aircraft radius",
     history_hours: "Activity window",
     max_activity_items: "Maximum activity items",
     map_render_mode: "Map render mode",
@@ -355,8 +363,13 @@
     return {
       ...DEFAULTS,
       ...config,
-      radius: numberOrDefault(config.radius, DEFAULTS.radius),
-      history_hours: numberOrDefault(config.history_hours, DEFAULTS.history_hours),
+      radius: clamp(numberOrDefault(config.radius, DEFAULTS.radius), 1, 500),
+      current_radius: clamp(numberOrDefault(config.current_radius, DEFAULTS.current_radius), 0, 500),
+      history_hours: clamp(
+        numberOrDefault(config.history_hours, DEFAULTS.history_hours),
+        1,
+        ACTIVITY_CACHE_HOURS,
+      ),
       max_activity_items: numberOrDefault(config.max_activity_items, DEFAULTS.max_activity_items),
       map_height: numberOrDefault(config.map_height, DEFAULTS.map_height),
       card_height: numberOrDefault(config.card_height, DEFAULTS.card_height),
@@ -501,6 +514,40 @@
 
   function metersPerPixel(lat, zoom) {
     return (156543.03392 * Math.cos((Number(lat) * Math.PI) / 180)) / 2 ** zoom;
+  }
+
+  function distanceBetweenKm(latA, lonA, latB, lonB) {
+    const toRadians = (degrees) => (degrees * Math.PI) / 180;
+    const earthRadiusKm = 6371;
+    const dLat = toRadians(Number(latB) - Number(latA));
+    const dLon = toRadians(Number(lonB) - Number(lonA));
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRadians(Number(latA))) *
+        Math.cos(toRadians(Number(latB))) *
+        Math.sin(dLon / 2) ** 2;
+    return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  function getFlightDistanceKm(flight, location) {
+    const distance = Number(flight?.distance);
+    if (Number.isFinite(distance)) return distance;
+    if (
+      location &&
+      hasValue(flight?.latitude) &&
+      hasValue(flight?.longitude) &&
+      Number.isFinite(Number(location.lat)) &&
+      Number.isFinite(Number(location.lon))
+    ) {
+      return distanceBetweenKm(location.lat, location.lon, flight.latitude, flight.longitude);
+    }
+    return NaN;
+  }
+
+  function withComputedDistance(flight, location) {
+    if (hasValue(flight.distance)) return flight;
+    const distance = getFlightDistanceKm(flight, location);
+    return Number.isFinite(distance) ? { ...flight, distance } : flight;
   }
 
   function asArray(value) {
@@ -663,6 +710,7 @@
         entity: currentEntity || DEFAULTS.entity,
         title: DEFAULTS.title,
         radius: DEFAULTS.radius,
+        current_radius: DEFAULTS.current_radius,
         history_hours: DEFAULTS.history_hours,
         map_provider: DEFAULTS.map_provider,
         show_map: true,
@@ -756,7 +804,7 @@
       if (!this._hass?.callWS || !this._config.entity || this._historyLoading) return;
 
       const entityIds = this._getActivitySourceEntityIds();
-      const key = `${entityIds.join(",")}:${this._config.history_hours}`;
+      const key = `${entityIds.join(",")}:cache:${ACTIVITY_CACHE_HOURS}`;
       if (key === this._historyRequestKey) return;
 
       this._historyRequestKey = key;
@@ -765,7 +813,7 @@
 
       try {
         const end = new Date();
-        const start = new Date(Date.now() - this._config.history_hours * 3600000);
+        const start = new Date(Date.now() - ACTIVITY_CACHE_HOURS * 3600000);
         const response = await this._hass.callWS({
           type: "history/history_during_period",
           start_time: start.toISOString(),
@@ -868,6 +916,19 @@
       return this._getFlightsFromEntity(entity).map((flight) => normalizeFlight(flight));
     }
 
+    _getTrackedFlights(location) {
+      return this._getCurrentFlights().map((flight) => withComputedDistance(flight, location));
+    }
+
+    _getCurrentDisplayFlights(trackedFlights, location) {
+      const radius = Number(this._config.current_radius);
+      if (!Number.isFinite(radius) || radius <= 0) return trackedFlights;
+      return trackedFlights.filter((flight) => {
+        const distance = getFlightDistanceKm(flight, location);
+        return Number.isFinite(distance) && distance <= radius;
+      });
+    }
+
     _getActivityFlights() {
       const cutoff = Date.now() - this._config.history_hours * 3600000;
       return [...this._activity.values()]
@@ -877,7 +938,7 @@
     }
 
     _pruneActivity() {
-      const cutoff = Date.now() - Math.max(this._config.history_hours, 24) * 3600000;
+      const cutoff = Date.now() - ACTIVITY_CACHE_HOURS * 3600000;
       for (const [key, entry] of this._activity.entries()) {
         if (entry.lastSeen < cutoff) this._activity.delete(key);
       }
@@ -885,25 +946,48 @@
 
     _loadLocalActivity() {
       this._activity.clear();
-      try {
-        const raw = localStorage.getItem(buildLocalStorageKey(this._config.entity));
-        const entries = raw ? JSON.parse(raw) : [];
-        for (const entry of entries) {
-          if (entry?.key) this._activity.set(entry.key, entry);
-        }
-      } catch {
-        this._activity.clear();
+      for (const entry of this._readLocalActivity()) {
+        this._activity.set(entry.key, entry);
       }
+      this._pruneActivity();
     }
 
     _saveLocalActivity() {
       try {
+        for (const entry of this._readLocalActivity()) {
+          this._activity.set(
+            entry.key,
+            mergeActivity(this._activity.get(entry.key), entry),
+          );
+        }
+        this._pruneActivity();
         localStorage.setItem(
           buildLocalStorageKey(this._config.entity),
-          JSON.stringify([...this._activity.values()].slice(0, 200)),
+          JSON.stringify(
+            [...this._activity.values()]
+              .sort((a, b) => b.lastSeen - a.lastSeen)
+              .slice(0, ACTIVITY_CACHE_LIMIT),
+          ),
         );
       } catch {
         // localStorage can be disabled in some kiosk browsers.
+      }
+    }
+
+    _readLocalActivity() {
+      try {
+        const raw = localStorage.getItem(buildLocalStorageKey(this._config.entity));
+        const entries = raw ? JSON.parse(raw) : [];
+        if (!Array.isArray(entries)) return [];
+        return entries
+          .filter((entry) => entry?.key && Number.isFinite(Number(entry.lastSeen)))
+          .map((entry) => ({
+            ...entry,
+            firstSeen: Number(entry.firstSeen || entry.lastSeen),
+            lastSeen: Number(entry.lastSeen),
+          }));
+      } catch {
+        return [];
       }
     }
 
@@ -1024,7 +1108,9 @@
     _render(force = false) {
       if (!this.shadowRoot || !this._config) return;
 
-      const currentFlights = this._getCurrentFlights();
+      const location = this._getLocation();
+      const trackedFlights = this._getTrackedFlights(location);
+      const currentFlights = this._getCurrentDisplayFlights(trackedFlights, location);
       const mainFlight = currentFlights
         .slice()
         .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity))[0];
@@ -1032,16 +1118,21 @@
       const entity = this._getEntity(this._config.entity);
       const enteredEntity = this._getEntity(this._config.entered_entity);
       const exitedEntity = this._getEntity(this._config.exited_entity);
-      const location = this._getLocation();
       const mapUrl = this._buildMapUrl(location);
       const currentCount = Number(entity?.state);
-      const countLabel = Number.isFinite(currentCount) ? currentCount : currentFlights.length;
+      const countLabel =
+        Number(this._config.current_radius) > 0
+          ? currentFlights.length
+          : Number.isFinite(currentCount)
+            ? currentCount
+            : currentFlights.length;
       const compactClass = this._config.compact ? " compact" : "";
       const modeClass =
         this._radarMode === "mil" ? " military mil" : this._radarMode === "atc" ? " atc" : "";
       const mapLinesClass = this._radarMapLines ? "" : " map-lines-off";
       const renderFingerprint = this._buildRenderFingerprint({
         currentFlights,
+        trackedFlights,
         activityFlights,
         enteredEntity,
         exitedEntity,
@@ -1083,7 +1174,7 @@
                   "map",
                   "Radar",
                   "mdi:radar",
-                  this._renderMap(mapUrl, location, currentFlights),
+                  this._renderMap(mapUrl, location, trackedFlights),
                 )
               : ""
           }
@@ -1117,6 +1208,7 @@
         config: {
           title: this._config.title,
           radius: this._config.radius,
+          current_radius: this._config.current_radius,
           map_provider: this._config.map_provider,
           map_render_mode: this._config.map_render_mode,
           map_url_template: this._config.map_url_template,
@@ -1144,6 +1236,7 @@
         historyLoading: this._historyLoading,
         historyError: this._historyError,
         currentFlights: model.currentFlights.map((flight) => this._flightRenderData(flight)),
+        trackedFlights: model.trackedFlights.map((flight) => this._flightRenderData(flight)),
         activityFlights: model.activityFlights.map((flight) => ({
           ...this._flightRenderData(flight),
           firstSeen: flight.firstSeen,
@@ -1268,7 +1361,7 @@
             </div>
             <div class="hero-title">${escapeHtml(this._renderHeroTitle(mainFlight))}</div>
             <div class="hero-subtitle">
-              ${escapeHtml(location.label)} - ${formatNumber(this._config.radius)} km radius
+              ${escapeHtml(location.label)} - ${formatNumber(this._config.radius)} km map radius
             </div>
             ${this._config.show_stats ? this._renderStatsLine(countLabel, enteredEntity, exitedEntity) : ""}
           </div>
@@ -1331,9 +1424,14 @@
       const current = escapeHtml(countLabel);
       const entered = escapeHtml(enteredEntity?.state ?? "-");
       const exited = escapeHtml(exitedEntity?.state ?? "-");
-      const radius = escapeHtml(`${formatNumber(this._config.radius)} km`);
+      const mapRadius = escapeHtml(`${formatNumber(this._config.radius)} km`);
+      const currentRadius = Number(this._config.current_radius);
+      const currentRadiusLabel =
+        Number.isFinite(currentRadius) && currentRadius > 0
+          ? ` / Current radius ${escapeHtml(`${formatNumber(currentRadius)} km`)}`
+          : "";
       return `
-        <p class="stats-inline">Current ${current} / Entered ${entered} / Exited ${exited} / Radius ${radius}</p>
+        <p class="stats-inline">Current ${current} / Entered ${entered} / Exited ${exited} / Map radius ${mapRadius}${currentRadiusLabel}</p>
       `;
     }
 
@@ -1448,9 +1546,9 @@
       `;
     }
 
-    _renderMap(mapUrl, location, currentFlights) {
+    _renderMap(mapUrl, location, trackedFlights) {
       if (this._config.map_render_mode !== "external") {
-        return this._renderLocalMap(mapUrl, location, currentFlights);
+        return this._renderLocalMap(mapUrl, location, trackedFlights);
       }
 
       if (!mapUrl) {
@@ -1480,7 +1578,7 @@
       `;
     }
 
-    _renderLocalMap(externalMapUrl, location, currentFlights) {
+    _renderLocalMap(externalMapUrl, location, trackedFlights) {
       const zoom = radiusToZoom(this._config.radius);
       const radarStyleMap = this._radarMode !== "nor";
       const tileTemplate = radarStyleMap
@@ -1498,7 +1596,12 @@
         34,
         (Number(this._config.radius) * 1000) / metersPerPixel(location.lat, zoom),
       );
-      const plottedFlights = currentFlights.filter(
+      const currentRadius = Number(this._config.current_radius);
+      const currentRadiusPixels =
+        Number.isFinite(currentRadius) && currentRadius > 0
+          ? Math.max(18, (currentRadius * 1000) / metersPerPixel(location.lat, zoom))
+          : 0;
+      const plottedFlights = trackedFlights.filter(
         (flight) => hasValue(flight.latitude) && hasValue(flight.longitude),
       );
 
@@ -1534,6 +1637,13 @@
               <div class="radius-ring" style="width: ${radiusPixels * 2}px; height: ${
                 radiusPixels * 2
               }px;"></div>
+              ${
+                currentRadiusPixels
+                  ? `<div class="current-radius-ring" style="width: ${
+                      currentRadiusPixels * 2
+                    }px; height: ${currentRadiusPixels * 2}px;"></div>`
+                  : ""
+              }
               <div class="home-marker" title="Center"></div>
             </div>
             ${this._renderRadarScopeOverlay(location, plottedFlights)}
@@ -2193,6 +2303,18 @@
           pointer-events: none;
         }
 
+        .current-radius-ring {
+          position: absolute;
+          left: 50%;
+          top: 50%;
+          border: 1px dashed color-mix(in srgb, var(--fr24-accent) 88%, transparent);
+          border-radius: 50%;
+          background: color-mix(in srgb, var(--fr24-accent) 7%, transparent);
+          box-shadow: 0 0 20px color-mix(in srgb, var(--fr24-accent) 16%, transparent);
+          transform: translate(-50%, -50%);
+          pointer-events: none;
+        }
+
         .home-marker {
           position: absolute;
           left: 50%;
@@ -2753,7 +2875,9 @@
         }
 
         .military .radius-ring,
-        .atc .radius-ring {
+        .atc .radius-ring,
+        .military .current-radius-ring,
+        .atc .current-radius-ring {
           border-color: rgba(128, 255, 154, 0.76);
           border-style: dashed;
           background: rgba(128, 255, 154, 0.04);

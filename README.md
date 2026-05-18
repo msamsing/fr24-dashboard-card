@@ -6,10 +6,10 @@ The card is designed for the FlightRadar24 Home Assistant integration, but it is
 
 ## Features
 
-- Compact current aircraft header with primary flight number and aircraft type, plus small Current, Entered, Exited, and Radius supporting text.
+- Compact current aircraft header with primary flight number and aircraft type, plus small Current, Entered, Exited, map radius, and optional current radius supporting text.
 - Current aircraft overview with flight number, callsign, airline, route, aircraft type, altitude, speed, and distance.
 - Single-row activity list of aircraft seen in the area during the last configurable number of hours, showing Danish military DTG, flight number, airline, route, and aircraft type.
-- Local radar map using OpenStreetMap tiles and aircraft coordinates from the Home Assistant sensor.
+- Local radar map using OpenStreetMap tiles and all aircraft coordinates from the configured FlightRadar24 current sensor.
 - Optional embedded provider map using FlightRadar24, ADS-B Exchange, or a custom URL template.
 - Optional map action buttons to open the provider map or account login page in a new tab.
 - Collapsible sections for current aircraft, map, and activity.
@@ -76,6 +76,7 @@ entered_entity: sensor.flightradar24_entered_area
 exited_entity: sensor.flightradar24_exited_area
 title: FlightRadar24
 radius: 25
+current_radius: 0
 history_hours: 6
 map_provider: fr24
 ```
@@ -87,6 +88,7 @@ By default, the card uses the Home Assistant instance location. You can also use
 ```yaml
 location_entity: person.example
 radius: 25
+current_radius: 5
 ```
 
 Or fixed coordinates:
@@ -95,7 +97,10 @@ Or fixed coordinates:
 latitude: 51.5007
 longitude: -0.1246
 radius: 25
+current_radius: 5
 ```
+
+`radius` controls the local map range and should normally match the radius configured in the FlightRadar24 integration. The local map plots every aircraft reported by the configured current sensor that includes coordinates. `current_radius` is optional; when set above `0`, the header and Current Aircraft section only show aircraft within that smaller radius. A value of `0` disables the extra current filter.
 
 ## Map Providers
 
@@ -233,7 +238,7 @@ map_line_tile_url_template: "https://example.com/tiles/{z}/{x}/{y}.png"
 
 ## Activity History
 
-The card first tries to read Home Assistant Recorder history through the frontend WebSocket API. It also keeps a local browser-side activity cache so recently seen aircraft can still appear when Recorder history is unavailable or does not include the needed attributes.
+The card first tries to read the last 24 hours from Home Assistant Recorder through the frontend WebSocket API. It also keeps a 24-hour browser-side activity cache so recently seen aircraft can still appear when Recorder history is unavailable or does not include the needed attributes. The `history_hours` option only controls which cached entries are shown.
 
 ```yaml
 history_hours: 12
@@ -264,7 +269,7 @@ The FlightRadar24 integration exposes `flights` attributes on Current in area, E
 Releases use numeric semantic version tags, for example:
 
 ```text
-v0.1.9
+v0.1.10
 ```
 
 HACS uses GitHub release tag names as the remote version when releases are available, so releases should be installed by version number rather than commit hash.
@@ -273,7 +278,7 @@ HACS uses GitHub release tag names as the remote version when releases are avail
 
 This card does not include any hardcoded personal location, account, or installation data. It reads the entities you configure in Home Assistant.
 
-When `remember_sections` or activity tracking is enabled, the card stores small UI/activity state records in the browser's `localStorage`. The selected external map provider may receive map requests containing the configured latitude and longitude.
+When `remember_sections` or activity tracking is enabled, the card stores small UI/activity state records in the browser's `localStorage`. This browser-side cache is shared between card instances in the same browser profile, but Home Assistant Recorder is needed for consistent history across different devices. The selected external map provider may receive map requests containing the configured latitude and longitude.
 
 The card does not store third-party account credentials. Sign-in is handled by the selected provider in a separate browser tab. Whether the embedded iframe can use that signed-in session depends on the provider and the browser's third-party cookie policy.
 

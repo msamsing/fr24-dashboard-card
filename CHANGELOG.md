@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.13
+
+- Add an always-visible local map data status line with card version, source entity, plotted/received aircraft count, and source update time.
+- Make it easier to diagnose browser cache/version mismatches and missing aircraft coordinates across different clients.
+
 ## v0.1.12
 
 - Add detailed UI descriptions to the Home Assistant visual editor schema.

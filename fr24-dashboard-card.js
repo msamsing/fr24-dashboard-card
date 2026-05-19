@@ -1,5 +1,5 @@
 (() => {
-  const CARD_VERSION = "0.1.12";
+  const CARD_VERSION = "0.1.13";
   const ACTIVITY_CACHE_HOURS = 24;
   const ACTIVITY_CACHE_LIMIT = 300;
   const DEFAULTS = {
@@ -569,6 +569,16 @@
     const monthLabel = DANISH_DTG_MONTHS[month - 1] || "---";
 
     return `${day}${hour}${minute}${zoneLetter} ${monthLabel} ${year}`;
+  }
+
+  function formatShortTime(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "-";
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).format(date);
   }
 
   function radiusToZoom(radius) {
@@ -1773,6 +1783,7 @@
 
     _renderLocalMap(externalMapUrl, location, trackedFlights) {
       const zoom = radiusToZoom(this._config.radius);
+      const sourceEntity = this._getEntity(this._config.entity);
       const radarStyleMap = this._radarMode !== "nor";
       const tileTemplate = radarStyleMap
         ? this._config.map_line_tile_url_template || DEFAULTS.map_line_tile_url_template
@@ -1848,11 +1859,26 @@
             <span><ha-icon icon="mdi:map-marker-radius"></ha-icon>${formatNumber(this._config.radius)} km</span>
             <span><ha-icon icon="mdi:airplane"></ha-icon>${plottedFlights.length}/${trackedFlights.length} plotted</span>
           </div>
+          ${this._renderDataStatus(sourceEntity, plottedFlights.length, trackedFlights.length)}
           ${
             this._config.show_map_actions && externalMapUrl
               ? this._renderMapActions(externalMapUrl)
               : ""
           }
+        </div>
+      `;
+    }
+
+    _renderDataStatus(sourceEntity, plottedCount, receivedCount) {
+      const state = sourceEntity?.state ?? "-";
+      const updated = formatShortTime(sourceEntity?.last_updated || sourceEntity?.last_changed);
+      const entityId = this._config.entity || "no entity";
+      return `
+        <div
+          class="data-status"
+          title="${escapeHtml(`${entityId} · state ${state} · updated ${updated}`)}"
+        >
+          v${escapeHtml(CARD_VERSION)} · ${escapeHtml(entityId)} · ${plottedCount}/${receivedCount} plotted · updated ${escapeHtml(updated)}
         </div>
       `;
     }
@@ -2581,6 +2607,31 @@
           --mdc-icon-size: 17px;
         }
 
+        .data-status {
+          position: absolute;
+          left: 12px;
+          right: 12px;
+          bottom: 10px;
+          z-index: 4;
+          min-height: 26px;
+          display: flex;
+          align-items: center;
+          max-width: calc(100% - 24px);
+          padding: 0 9px;
+          border-radius: 7px;
+          color: rgba(255, 255, 255, 0.9);
+          background: rgba(18, 28, 38, 0.68);
+          backdrop-filter: blur(8px);
+          font-family: var(--code-font-family, "Roboto Mono", monospace);
+          font-size: 10px;
+          line-height: 1.2;
+          letter-spacing: 0;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          pointer-events: auto;
+        }
+
         .map-actions {
           position: absolute;
           right: 12px;
@@ -3157,7 +3208,9 @@
         .military .map-overlay span,
         .atc .map-overlay span,
         .military .map-actions a,
-        .atc .map-actions a {
+        .atc .map-actions a,
+        .military .data-status,
+        .atc .data-status {
           color: #d9ffe2;
           background: rgba(4, 12, 8, 0.84);
           border: 1px solid rgba(128, 255, 154, 0.24);
@@ -3269,6 +3322,12 @@
           .map-actions {
             position: static;
             margin: 8px;
+          }
+
+          .data-status {
+            position: static;
+            margin: 0 8px 8px;
+            max-width: none;
           }
 
           .map-shell,

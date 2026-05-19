@@ -102,6 +102,8 @@ current_radius: 5
 
 `radius` controls the local map range and should normally match the radius configured in the FlightRadar24 integration. The local map plots every aircraft reported by the configured current sensor that includes coordinates. `current_radius` is optional; when set above `0`, the header and Current Aircraft section only show aircraft within that smaller radius. A value of `0` disables the extra current filter.
 
+The local map includes a small data status line with the card version, source entity, plotted/received aircraft count, and the source sensor update time. If two browsers disagree, compare this line first. Different versions usually mean browser or Home Assistant frontend cache. A low plotted count such as `1/5 plotted` means the card received five aircraft but only one had usable coordinates.
+
 ## Map Providers
 
 The default map mode is the local radar map. It does not embed ADS-B Exchange or FlightRadar24, so it avoids provider-side iframe/API errors such as ADS-B Exchange `403` responses.
@@ -273,7 +275,7 @@ The FlightRadar24 integration exposes `flights` attributes on Current in area, E
 Releases use numeric semantic version tags, for example:
 
 ```text
-v0.1.12
+v0.1.13
 ```
 
 HACS uses GitHub release tag names as the remote version when releases are available, so releases should be installed by version number rather than commit hash.

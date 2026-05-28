@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.14
+
+- Select the default Current Aircraft from the nearest plotted aircraft to the configured/home position.
+- Make aircraft in the Current Aircraft strip and local map markers clickable so the focused aircraft can be changed manually.
+- Prefer coordinate-based distance calculations when aircraft latitude/longitude are available.
+
 ## v0.1.13
 
 - Add an always-visible local map data status line with card version, source entity, plotted/received aircraft count, and source update time.

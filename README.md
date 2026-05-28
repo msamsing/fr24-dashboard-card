@@ -275,7 +275,7 @@ The FlightRadar24 integration exposes `flights` attributes on Current in area, E
 Releases use numeric semantic version tags, for example:
 
 ```text
-v0.1.13
+v0.1.14
 ```
 
 HACS uses GitHub release tag names as the remote version when releases are available, so releases should be installed by version number rather than commit hash.

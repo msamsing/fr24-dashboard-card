@@ -1,5 +1,5 @@
 (() => {
-  const CARD_VERSION = "0.1.13";
+  const CARD_VERSION = "0.1.14";
   const ACTIVITY_CACHE_HOURS = 24;
   const ACTIVITY_CACHE_LIMIT = 300;
   const DEFAULTS = {
@@ -646,24 +646,32 @@
   }
 
   function getFlightDistanceKm(flight, location) {
+    if (location && hasCoordinates(flight)) {
+      const coordinateDistance = distanceBetweenKm(
+        location.lat,
+        location.lon,
+        flight.latitude,
+        flight.longitude,
+      );
+      if (Number.isFinite(coordinateDistance)) return coordinateDistance;
+    }
+
     const distance = numericValue(flight?.distance);
     if (Number.isFinite(distance)) return distance;
-    if (
-      location &&
-      hasValue(flight?.latitude) &&
-      hasValue(flight?.longitude) &&
-      Number.isFinite(numericValue(location.lat)) &&
-      Number.isFinite(numericValue(location.lon))
-    ) {
-      return distanceBetweenKm(location.lat, location.lon, flight.latitude, flight.longitude);
-    }
     return NaN;
   }
 
   function withComputedDistance(flight, location) {
-    if (hasValue(flight.distance)) return flight;
     const distance = getFlightDistanceKm(flight, location);
     return Number.isFinite(distance) ? { ...flight, distance } : flight;
+  }
+
+  function sortFlightsByDistance(flights, location) {
+    return [...flights].sort(
+      (a, b) =>
+        numericValue(getFlightDistanceKm(a, location), Infinity) -
+        numericValue(getFlightDistanceKm(b, location), Infinity),
+    );
   }
 
   function hasCoordinates(flight) {
@@ -824,6 +832,7 @@
       this._radarMapLinesStorageKey = "";
       this._radarMode = DEFAULTS.radar_mode;
       this._radarMapLines = DEFAULTS.radar_map_lines;
+      this._selectedFlightKey = "";
       this._eventUnsubscribers = [];
       this._eventSubscriptionHass = null;
       this._lastEntityStateFingerprint = "";
@@ -1122,11 +1131,15 @@
 
     _getCurrentDisplayFlights(trackedFlights, location) {
       const radius = numericValue(this._config.current_radius);
-      if (!Number.isFinite(radius) || radius <= 0) return trackedFlights;
-      return trackedFlights.filter((flight) => {
-        const distance = getFlightDistanceKm(flight, location);
-        return Number.isFinite(distance) && distance <= radius;
-      });
+      const plottedFlights = trackedFlights.filter((flight) => hasCoordinates(flight));
+      const eligibleFlights =
+        !Number.isFinite(radius) || radius <= 0
+          ? plottedFlights
+          : plottedFlights.filter((flight) => {
+              const distance = getFlightDistanceKm(flight, location);
+              return Number.isFinite(distance) && distance <= radius;
+            });
+      return sortFlightsByDistance(eligibleFlights, location);
     }
 
     _getActivityFlights() {
@@ -1294,6 +1307,12 @@
       this._render(true);
     }
 
+    _selectFlight(flightKey) {
+      if (!flightKey) return;
+      this._selectedFlightKey = flightKey;
+      this._render(true);
+    }
+
     _toggleSection(section) {
       this._sections.set(section, !this._isOpen(section));
       this._saveSectionState();
@@ -1305,30 +1324,34 @@
       return this._sections.get(section);
     }
 
+    _resolveMainFlight(currentFlights, location) {
+      if (!currentFlights.length) {
+        this._selectedFlightKey = "";
+        return null;
+      }
+
+      const selectedFlight = this._selectedFlightKey
+        ? currentFlights.find((flight) => flight.key === this._selectedFlightKey)
+        : null;
+      if (selectedFlight) return selectedFlight;
+
+      if (this._selectedFlightKey) this._selectedFlightKey = "";
+      return sortFlightsByDistance(currentFlights, location)[0] || null;
+    }
+
     _render(force = false) {
       if (!this.shadowRoot || !this._config) return;
 
       const location = this._getLocation();
       const trackedFlights = this._getTrackedFlights(location);
       const currentFlights = this._getCurrentDisplayFlights(trackedFlights, location);
-      const mainFlight = currentFlights
-        .slice()
-        .sort(
-          (a, b) =>
-            numericValue(a.distance, Infinity) - numericValue(b.distance, Infinity),
-        )[0];
+      const mainFlight = this._resolveMainFlight(currentFlights, location);
       const activityFlights = this._getActivityFlights();
       const entity = this._getEntity(this._config.entity);
       const enteredEntity = this._getEntity(this._config.entered_entity);
       const exitedEntity = this._getEntity(this._config.exited_entity);
       const mapUrl = this._buildMapUrl(location);
-      const currentCount = numericValue(entity?.state);
-      const countLabel =
-        numericValue(this._config.current_radius, 0) > 0
-          ? currentFlights.length
-          : Number.isFinite(currentCount)
-            ? currentCount
-            : currentFlights.length;
+      const countLabel = currentFlights.length;
       const compactClass = this._config.compact ? " compact" : "";
       const modeClass =
         this._radarMode === "mil" ? " military mil" : this._radarMode === "atc" ? " atc" : "";
@@ -1342,6 +1365,7 @@
         location,
         mapUrl,
         countLabel,
+        mainFlight,
       });
 
       if (!force && this._hasRendered && renderFingerprint === this._lastRenderFingerprint) {
@@ -1377,7 +1401,7 @@
                   "map",
                   "Radar",
                   "mdi:radar",
-                  this._renderMap(mapUrl, location, trackedFlights),
+                  this._renderMap(mapUrl, location, trackedFlights, mainFlight),
                 )
               : ""
           }
@@ -1403,6 +1427,9 @@
       this.shadowRoot
         .querySelector("[data-map-lines-toggle]")
         ?.addEventListener("click", () => this._toggleRadarMapLines());
+      for (const button of this.shadowRoot.querySelectorAll("[data-flight-key]")) {
+        button.addEventListener("click", () => this._selectFlight(button.dataset.flightKey));
+      }
       this._restoreScrollState(scrollState);
     }
 
@@ -1438,6 +1465,8 @@
         sections: Object.fromEntries(this._sections.entries()),
         historyLoading: this._historyLoading,
         historyError: this._historyError,
+        selectedFlightKey: this._selectedFlightKey,
+        mainFlight: model.mainFlight ? this._flightRenderData(model.mainFlight) : null,
         currentFlights: model.currentFlights.map((flight) => this._flightRenderData(flight)),
         trackedFlights: model.trackedFlights.map((flight) => this._flightRenderData(flight)),
         activityFlights: model.activityFlights.map((flight) => ({
@@ -1711,7 +1740,7 @@
             </div>
           </div>
         </div>
-        ${this._renderCurrentStrip(currentFlights)}
+        ${this._renderCurrentStrip(currentFlights, mainFlight?.key)}
       `;
     }
 
@@ -1730,7 +1759,7 @@
       `;
     }
 
-    _renderCurrentStrip(flights) {
+    _renderCurrentStrip(flights, activeFlightKey) {
       if (flights.length <= 1) return "";
       return `
         <div class="current-strip">
@@ -1738,10 +1767,16 @@
             .slice(0, 8)
             .map(
               (flight) => `
-                <div class="mini-flight">
+                <button
+                  class="mini-flight ${flight.key === activeFlightKey ? "selected" : ""}"
+                  type="button"
+                  data-flight-key="${escapeHtml(flight.key)}"
+                  aria-pressed="${flight.key === activeFlightKey}"
+                  title="${escapeHtml(`${flight.flightNumber} - ${flight.aircraft}`)}"
+                >
                   <span>${escapeHtml(flight.flightNumber)}</span>
                   <small>${escapeHtml(flight.aircraft)}</small>
-                </div>
+                </button>
               `,
             )
             .join("")}
@@ -1749,9 +1784,9 @@
       `;
     }
 
-    _renderMap(mapUrl, location, trackedFlights) {
+    _renderMap(mapUrl, location, trackedFlights, mainFlight) {
       if (this._config.map_render_mode !== "external") {
-        return this._renderLocalMap(mapUrl, location, trackedFlights);
+        return this._renderLocalMap(mapUrl, location, trackedFlights, mainFlight);
       }
 
       if (!mapUrl) {
@@ -1781,7 +1816,7 @@
       `;
     }
 
-    _renderLocalMap(externalMapUrl, location, trackedFlights) {
+    _renderLocalMap(externalMapUrl, location, trackedFlights, mainFlight) {
       const zoom = radiusToZoom(this._config.radius);
       const sourceEntity = this._getEntity(this._config.entity);
       const radarStyleMap = this._radarMode !== "nor";
@@ -1851,7 +1886,9 @@
             </div>
             ${this._renderRadarScopeOverlay(location, plottedFlights)}
             <div class="map-marker-layer">
-              ${plottedFlights.map((flight) => this._renderMapMarker(flight, location, zoom)).join("")}
+              ${plottedFlights
+                .map((flight) => this._renderMapMarker(flight, location, zoom, mainFlight?.key))
+                .join("")}
             </div>
           </div>
           <div class="map-overlay">
@@ -1948,7 +1985,7 @@
       };
     }
 
-    _renderMapMarker(flight, location, zoom) {
+    _renderMapMarker(flight, location, zoom, activeFlightKey) {
       const center = latLonToTile(location.lat, location.lon, zoom);
       const point = latLonToTile(flight.latitude, flight.longitude, zoom);
       const x = (point.x - center.x) * 256;
@@ -1960,10 +1997,14 @@
       const trackLength = clamp((Number.isFinite(speed) ? speed : 220) / 600 * 58, 18, 58);
       const speedLabel = Number.isFinite(speed) ? `${formatNumber(speed)} kts` : "- kts";
       const altitudeLabel = Number.isFinite(altitude) ? `${formatNumber(altitude)} ft` : "- ft";
+      const activeClass = flight.key === activeFlightKey ? " selected" : "";
 
       return `
-        <div
-          class="plane-marker"
+        <button
+          class="plane-marker${activeClass}"
+          type="button"
+          data-flight-key="${escapeHtml(flight.key)}"
+          aria-pressed="${flight.key === activeFlightKey}"
           style="--plane-x: ${x}px; --plane-y: ${y}px; --plane-heading: ${heading}deg; --track-length: ${trackLength}px;"
           title="${escapeHtml(`${flight.flightNumber} - ${flight.aircraft}`)}"
         >
@@ -1976,7 +2017,7 @@
             <b>${escapeHtml(flight.flightNumber)}</b>
             <span>${escapeHtml(`${speedLabel} ${altitudeLabel}`)}</span>
           </span>
-        </div>
+        </button>
       `;
     }
 
@@ -2432,6 +2473,24 @@
         .mini-flight {
           padding: 10px 12px;
           min-width: 0;
+          appearance: none;
+          border: var(--fr24-soft-border);
+          color: inherit;
+          font: inherit;
+          text-align: left;
+          cursor: pointer;
+          transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+        }
+
+        .mini-flight:hover,
+        .mini-flight.selected {
+          border-color: color-mix(in srgb, var(--fr24-accent) 68%, transparent);
+          box-shadow: 0 0 0 1px color-mix(in srgb, var(--fr24-accent) 28%, transparent);
+        }
+
+        .mini-flight:focus-visible {
+          outline: 2px solid var(--fr24-accent);
+          outline-offset: 2px;
         }
 
         .mini-flight span,
@@ -2562,6 +2621,21 @@
           box-shadow: 0 4px 12px rgba(18, 28, 38, 0.36);
           transform: translate(var(--plane-x), var(--plane-y));
           transform-origin: center;
+          appearance: none;
+          padding: 0;
+          font: inherit;
+          cursor: pointer;
+          pointer-events: auto;
+        }
+
+        .plane-marker.selected {
+          z-index: 2;
+          box-shadow: 0 0 0 3px color-mix(in srgb, var(--fr24-warn) 72%, transparent), 0 4px 14px rgba(18, 28, 38, 0.4);
+        }
+
+        .plane-marker:focus-visible {
+          outline: 2px solid var(--fr24-warn);
+          outline-offset: 4px;
         }
 
         .plane-symbol {
@@ -3042,6 +3116,14 @@
           box-shadow: inset 0 0 0 1px rgba(255, 212, 95, 0.04);
         }
 
+        .military .mini-flight:hover,
+        .military .mini-flight.selected,
+        .atc .mini-flight:hover,
+        .atc .mini-flight.selected {
+          border-color: rgba(128, 255, 154, 0.68);
+          box-shadow: inset 0 0 0 1px rgba(128, 255, 154, 0.24), 0 0 14px rgba(128, 255, 154, 0.12);
+        }
+
         .military .metric span,
         .atc .metric span {
           color: rgba(128, 255, 154, 0.7);
@@ -3152,6 +3234,12 @@
           filter: drop-shadow(0 0 5px rgba(128, 255, 154, 0.72));
         }
 
+        .military .plane-marker.selected {
+          color: #ffd45f;
+          box-shadow: none;
+          filter: drop-shadow(0 0 8px rgba(255, 212, 95, 0.7));
+        }
+
         .atc .radar-sweep {
           opacity: 0.2;
           animation-duration: 8s;
@@ -3166,6 +3254,17 @@
           border: 1px solid rgba(183, 255, 203, 0.9);
           border-radius: 1px;
           box-shadow: 0 0 8px rgba(183, 255, 203, 0.74);
+        }
+
+        .atc .plane-marker.selected {
+          background: #ffd45f;
+          border-color: #ffd45f;
+          box-shadow: 0 0 10px rgba(255, 212, 95, 0.78);
+        }
+
+        .atc .plane-marker.selected .atc-label {
+          color: #fff2b8;
+          text-shadow: 0 0 10px rgba(255, 212, 95, 0.72);
         }
 
         .atc .plane-symbol {
